@@ -29,6 +29,22 @@ can be built until we can look at its on-disk session/log format.
 - A real Cursor session renders in the waterfall with breaks/hit-rate, or a
   documented finding that Cursor logs lack the needed fields.
 
+## Research findings (2026-08-26, web only — no local install)
+
+- Local storage is `~/.cursor/chats/<chat-id>/<uuid>/store.db` — undocumented
+  SQLite with opaque blobs; no confirmed token data. tokscale explicitly does
+  NOT parse local Cursor state and uses the web API instead.
+- Cursor's usage CSV export (cursor.com/dashboard/usage) has per-request rows
+  **with cache read/write token columns** → break detection ports over.
+- Degradations vs Codex: no event stream → only idle-gap/TTL attribution, no
+  history-rewrite/config forensics; sessions must be inferred from timestamp
+  gaps; acquisition is pull-from-cloud (manual CSV or session token), so no
+  live tail for Cursor.
+- Open: inspect store.db blobs on a machine with Cursor installed — if they
+  hold serialized usage, a first-class local adapter is back on the table.
+  Decision point below still stands, now shaped as: local adapter vs CSV
+  fallback vs skip.
+
 ## Notes
 
 - Keep adapter self-contained like the Codex one; no shared parsing helpers
