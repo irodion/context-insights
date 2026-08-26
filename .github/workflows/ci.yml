@@ -31,5 +31,7 @@ jobs:
       - run: ruff check --output-format=github .
       - run: ruff format --check .
       - run: mypy
+      - name: unit tests
+        run: python -m unittest discover -p 'test_*.py' --verbose
       - name: smoke test (CLI runs without a sessions dir)
         run: python parse_codex.py --dir "$RUNNER_TEMP/no-sessions"

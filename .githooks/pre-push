@@ -1,5 +1,5 @@
 #!/bin/sh
-# Lint + type-check before pushing. Enable once per clone:
+# Lint, type-check and test before pushing. Enable once per clone:
 #   git config core.hooksPath .githooks
 # Bypass in a pinch: git push --no-verify
 set -eu
@@ -25,3 +25,5 @@ echo "pre-push: ruff format --check"
 run ruff format --check .
 echo "pre-push: mypy"
 run mypy
+echo "pre-push: unittest"
+python3 -m unittest discover -p 'test_*.py'

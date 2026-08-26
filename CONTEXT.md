@@ -26,6 +26,39 @@
 
 **Hit Rate** — Cached Input / total input tokens, per Request or aggregated over a Session.
 
+**Retention** — on a Cache Break, Cached Input / Expected Cache: how much of the
+prefix survived. Near zero means the cache was *cold* (nothing to reuse); a middling
+value means the prompt *diverged* part-way through while the cache was still alive.
+The two call for different fixes, so they are diagnosed separately.
+
+**Idle Gap** — seconds between a Request and the Request before it. The dominant
+predictor of a Cache Break: measured over this corpus, under 2 minutes 3% of
+Requests break, beyond an hour 86% do.
+
+**Replayed Request** — a `token_count` event the agent re-emits without a new API
+call having happened (Codex does this twice within a Turn and again when the next
+Turn opens). Its usage is byte-identical to the Request before it. Not a Request:
+counting it invents Cache Breaks that never occurred.
+
+## Break Cause
+
+**Break Cause** — what invalidated the prefix, attributed to each Cache Break from
+the surrounding log events. One of:
+
+- **turn_context change** — model, effort, sandbox or instructions differ from the
+  previous Turn, so the prompt header changed and the whole prefix died. (`turn_id`
+  is fresh every Turn by design and never counts as a change.)
+- **TTL expiry** — a long Idle Gap, and the cache came back cold. The prefix simply
+  aged out provider-side.
+- **cache warm-up** — a miss seconds after a cold Request, whose cache write had not
+  landed yet. Attributable to the *preceding* break, not to a new cause.
+- **turn-boundary history rewrite** — the first Request of a new Turn, cache still
+  warm, prefix diverged anyway: history was re-serialized between Turns.
+- **mid-turn history change** — a partial-Retention break inside a Turn; the prompt
+  changed part-way through while the cache was alive.
+- **unknown** — a cold break with no Idle Gap and no context change. Nothing in the
+  log accounts for it; say so rather than inventing a cause.
+
 ## Visualization
 
 **Waterfall** — the target visual: Requests on the x-axis over time, each drawn as a stacked bar of Cached Input (cool) vs uncached input (hot), like an RF spectrum waterfall. Cache Breaks show as hot spikes.
