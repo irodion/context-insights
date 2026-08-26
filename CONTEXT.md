@@ -40,6 +40,17 @@ call having happened (Codex does this twice within a Turn and again when the nex
 Turn opens). Its usage is byte-identical to the Request before it. Not a Request:
 counting it invents Cache Breaks that never occurred.
 
+## Watching
+
+**Live Session** — the Session being written to right now: the most recently
+modified rollout with Thread Source `user`. Subagent Sessions are skipped — the
+one you are sitting in front of is the one worth watching.
+
+**Watch Mode** — follow the Live Session and rebuild the Waterfall every few
+seconds, so a Cache Break shows up while you are still in the Turn that caused
+it. The Live Session is pinned first in the Waterfall; the rest keep their
+re-billed ranking.
+
 ## Break Cause
 
 **Break Cause** — what invalidated the prefix, attributed to each Cache Break from

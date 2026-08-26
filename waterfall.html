@@ -1,6 +1,8 @@
 <!doctype html>
 <!-- Waterfall — session spectrum view of Codex cache efficiency.
-     Data: waterfall_data.js, regenerate with `python3 parse_codex.py --web` -->
+     Data: waterfall_data.js, regenerate with `python3 parse_codex.py --web`.
+     Served over http (`--watch`) the page re-reads that file every few seconds,
+     so the Live Session grows while you work. Opened from disk it stays static. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -42,6 +44,9 @@
   .sessrow.sel { background: var(--cached-soft); }
   .sessrow b { display: block; font-size: 12px; }
   .sessrow small { color: var(--ink2); }
+  .live { color: var(--rebill); font-weight: 600; }
+  .live::before { content: "●"; margin-right: 4px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
   .chart { flex: 1; min-width: 0; }
   .pill-crit { color: var(--rebill); font-weight: 600; }
   .bars { display: flex; align-items: flex-end; gap: 2px; height: 380px; border-bottom: 1px solid var(--grid); overflow-x: auto; padding-top: 10px; }
@@ -62,6 +67,9 @@ const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? Math.round(n/10
 const KINDS = ["first","hit","break","compaction"];
 // request tuple: [input, cached, rebilled, kind, hh:mm]
 const IN=0, CA=1, RB=2, KI=3, TS=4;
+const POLL_MS = 3000;
+
+let sessions = SESSIONS;
 
 const tip = document.getElementById("tip");
 function tipHtml(r, i) {
@@ -71,22 +79,51 @@ function tipHtml(r, i) {
     (r[RB] ? `<br><span class="pill-crit">re-billed ${fmt(r[RB])}</span>` : "");
 }
 
-const state = { sess: 0, filter: "" };
+// The selection is held by Session id, not row number: a live rewrite can re-rank
+// the list under the cursor, and the row you were reading should stay selected.
+const state = { id: sessions.length ? sessions[0].id : null, filter: "" };
 function totals() {
   let inp = 0, ca = 0, rb = 0, br = 0;
-  SESSIONS.forEach(s => { inp += s.a.input_tokens; ca += s.a.cached_tokens; rb += s.a.rebilled_tokens; br += s.a.breaks; });
+  sessions.forEach(s => { inp += s.a.input_tokens; ca += s.a.cached_tokens; rb += s.a.rebilled_tokens; br += s.a.breaks; });
   return { inp, ca, rb, br };
+}
+// Scroll and focus survive the innerHTML swap. Bars scrolled to the right edge stay
+// pinned there, so new Requests appear as they are billed.
+function captureUi(app) {
+  const list = app.querySelector(".sesslist"), bars = app.querySelector(".bars");
+  const filter = document.getElementById("filter");
+  return {
+    listTop: list ? list.scrollTop : 0,
+    barsLeft: bars ? bars.scrollLeft : 0,
+    barsAtEnd: bars ? bars.scrollLeft + bars.clientWidth >= bars.scrollWidth - 4 : true,
+    focused: !!filter && document.activeElement === filter,
+    caret: filter ? filter.selectionStart : 0,
+  };
+}
+function restoreUi(app, keep) {
+  const list = app.querySelector(".sesslist"), bars = app.querySelector(".bars");
+  if (list) list.scrollTop = keep.listTop;
+  if (bars) bars.scrollLeft = keep.barsAtEnd ? bars.scrollWidth : keep.barsLeft;
+  const filter = document.getElementById("filter");
+  if (keep.focused && filter) { filter.focus(); filter.setSelectionRange(keep.caret, keep.caret); }
 }
 function render() {
   const app = document.getElementById("app");
+  const keep = captureUi(app);
+  if (!sessions.length) {
+    app.innerHTML = `<h1>Context Insights — Waterfall</h1>
+      <div class="sub">no sessions yet — start a Codex session and it will appear here</div>`;
+    return;
+  }
   const t = totals();
-  const visible = SESSIONS.map((s, i) => [s, i])
+  const visible = sessions.map((s, i) => [s, i])
     .filter(([s]) => !state.filter || (s.cwd + " " + s.date + " " + (s.model || "")).toLowerCase().includes(state.filter));
-  const sel = SESSIONS[state.sess];
+  const chosen = sessions.findIndex(s => s.id === state.id);
+  const sel = sessions[chosen >= 0 ? chosen : 0];
   const max = Math.max(...sel.r.map(r => r[IN]));
   const h = v => Math.max(v ? 2 : 0, Math.round(366 * v / max));
   app.innerHTML = `<h1>Context Insights — Waterfall</h1>
-  <div class="sub">${SESSIONS.length} Codex sessions · overall hit rate ${Math.round(100*t.ca/t.inp)}% ·
+  <div class="sub">${sessions.length} Codex sessions · overall hit rate ${Math.round(100*t.ca/t.inp)}% ·
     <span class="pill-crit">${t.br} cache breaks, ${fmt(t.rb)} tokens re-billed</span></div>
   <div class="legend">
     <span style="--c:var(--cached)">cached input</span>
@@ -96,12 +133,12 @@ function render() {
   <div class="layout">
     <div class="sesslist card">
       <input id="filter" type="search" placeholder="filter sessions…" value="${state.filter}">` +
-      visible.map(([s, i]) =>
-        `<div class="sessrow ${i === state.sess ? "sel" : ""}" data-i="${i}">
-          <b>${s.cwd}</b><small>${s.date} · ${fmt(s.a.rebilled_tokens)} re-billed · ${s.a.breaks} breaks</small></div>`).join("") + `
+      visible.map(([s]) =>
+        `<div class="sessrow ${s.id === sel.id ? "sel" : ""}" data-id="${s.id}">
+          <b>${s.cwd}</b><small>${s.live ? `<span class="live">live</span> · ` : ""}${s.date} · ${fmt(s.a.rebilled_tokens)} re-billed · ${s.a.breaks} breaks</small></div>`).join("") + `
     </div>
     <div class="chart card">
-      <div style="margin-bottom:8px"><b>${sel.cwd}</b> <small style="color:var(--muted)">${sel.date} · ${sel.model || "?"} ·
+      <div style="margin-bottom:8px"><b>${sel.cwd}</b> <small style="color:var(--muted)">${sel.live ? `<span class="live">live</span> · ` : ""}${sel.date} · ${sel.model || "?"} ·
         ${sel.a.requests} requests · hit ${Math.round(sel.a.hit_rate*100)}% ·
         <span class="pill-crit">${sel.a.breaks} breaks, ${fmt(sel.a.rebilled_tokens)} re-billed</span></small></div>
       <div class="bars">` + sel.r.map((r, i) => {
@@ -116,9 +153,9 @@ function render() {
     </div>
   </div>`;
   app.querySelectorAll(".sessrow").forEach(el =>
-    el.onclick = () => { state.sess = +el.dataset.i; render(); });
+    el.onclick = () => { state.id = el.dataset.id; render(); });
   const filter = document.getElementById("filter");
-  filter.oninput = () => { state.filter = filter.value.toLowerCase(); render(); document.getElementById("filter").focus(); };
+  filter.oninput = () => { state.filter = filter.value.toLowerCase(); render(); };
   const bars = app.querySelector(".bars");
   bars.addEventListener("mousemove", e => {
     const b = e.target.closest(".bar");
@@ -129,8 +166,27 @@ function render() {
     tip.style.top = (e.clientY + 14) + "px";
   });
   bars.addEventListener("mouseleave", () => tip.style.display = "none");
+  restoreUi(app, keep);
+}
+
+// Watch Mode: re-read the generated data file and re-render. Only over http —
+// opened from disk there is nothing rewriting the file, and fetch() is blocked anyway.
+let lastData = null;
+async function poll() {
+  try {
+    const text = await (await fetch("waterfall_data.js?t=" + Date.now(), { cache: "no-store" })).text();
+    if (text === lastData) return;
+    const next = new Function(text + "\nreturn SESSIONS;")();
+    lastData = text;
+    sessions = next;
+    if (!sessions.some(s => s.id === state.id)) state.id = sessions.length ? sessions[0].id : null;
+    render();
+  } catch (e) {
+    // server gone, or the file was caught mid-rewrite; the next tick picks it up
+  }
 }
 render();
+if (location.protocol.startsWith("http")) setInterval(poll, POLL_MS);
 </script>
 </body>
 </html>
