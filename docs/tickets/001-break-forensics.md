@@ -106,6 +106,13 @@ byte-identical to the previous Request is a replay, not a Request. Corpus effect
 7844 → 7628 requests, 418 → 390 breaks, 21.7M → 19.3M re-billed. 11% of the
 re-billed total was phantom.
 
+Matching per-request counts alone are *not* proof of a replay — two genuine calls
+could bill identically — so the rule also requires `total_token_usage` to have
+stood still, which only a replay does (review of PR #2). No behaviour change on
+today's corpus: all 274 replays have the cumulative total unchanged and zero
+Requests would have been wrongly dropped, so the two rules agree request-for-request.
+It closes a latent hole rather than fixing a live symptom.
+
 **Idle threshold is derived, not hardcoded.** `idle_gap_advice()` walks a ladder
 of gaps and reports the shortest at which ≥50% of resumed Requests broke. On this
 corpus that is 10m, covering 10.8M of 19.3M re-billed tokens. The gap/break
