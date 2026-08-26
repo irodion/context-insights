@@ -34,7 +34,24 @@ changed in the prompt prefix, e.g.:
   4× ~80k re-billed) names a concrete cause, not "unknown".
 - No change to existing summary/detail output.
 
-## Open questions
+## Resolved research (2026-08-26)
 
-- Do rollout files carry enough to distinguish "history edited" from
-  "parallel tool calls raced"? Investigate on real breaks first; timebox it.
+Investigated the easycall 2026-03-20 session timeline. **The rollout carries
+enough to attribute breaks.** Every break sits at a turn boundary; three
+detectable cause categories:
+
+1. **TTL expiry** — long idle gap (`task_complete` → next `task_started`),
+   then cached ≈ 0. Easycall requests 18 (1h40m gap) and 27 (15m gap).
+2. **Turn-boundary history rewrite** — partial cache retention (request 23
+   kept 80k of 111k): prefix diverged mid-history, consistent with reasoning
+   items being dropped/re-serialized at turn start. Distinguish from TTL by
+   partial survival + short gap.
+3. **turn_context change** — model/effort/sandbox logged per turn; diff it.
+
+Parser fixes to fold into this ticket:
+- **Duplicate token_count events**: identical last_token_usage replayed
+  across a turn boundary (easycall requests 16/17) — dedupe before analysis,
+  currently inflates break counts.
+- Turn boundaries are explicit (`task_started`/`task_complete` +
+  `user_message`) — record turn index per request; `--explain` should report
+  the idle gap preceding a break.
