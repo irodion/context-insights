@@ -38,6 +38,10 @@ Cut-corner architecture (no websockets, no server framework):
   survived the live re-render.
 - Ctrl-C leaves no stray processes. ✅ SIGINT to the real CLI exits 0, prints
   `stopped`, and the port is free immediately after.
+- A Session caught before it has billed anything renders sanely. ✅ A rollout
+  caught empty or mid-line is not a Session yet and is skipped until the next
+  tick; one whose `session_meta` has landed but has no Requests shows
+  "no requests yet" rather than `hit rate NaN%` / `max -Infinity`.
 - Switching rollouts does not roll the Waterfall backward. ✅ Session A opens
   below `--min-requests`, grows to 3 Requests and a 74k break while live, then
   Session B becomes newest: A keeps all 3 Requests and the break, and exactly one
@@ -100,6 +104,16 @@ billed. This also retires the old re-focus hack in the filter handler.
 `waterfall_payload()`. The http server and the browser polling stay untested
 wiring, verified by hand (see Acceptance) rather than by a test that would mostly
 assert `time.sleep`.
+
+**A Session is not a Session until the log says so.** Watch Mode races the agent
+writing the file, so a tick can catch a rollout that exists but holds nothing, or
+half an opening line. The adapter already returned `None` for that; `tick()` was
+testing the *path* rather than the loaded value and handed `None` to `analyze()`,
+which took the watcher down. It now tests what came back. The state right after —
+`session_meta` written, no Request billed yet — is a real Session with an empty
+Waterfall, which the page has to render rather than divide by: an unguarded `max`
+gave `-Infinity` and a zero-token corpus gave `NaN%`, in the first seconds of
+every watched Session.
 
 **A third seam, added after the loop shipped a bug.** Leaving the loop untested
 cost exactly what the switch bug above describes — no unit test could see it,

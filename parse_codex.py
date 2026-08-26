@@ -481,7 +481,11 @@ class WatchMode:
         """One iteration: re-read the Live Session and fold it into what we have seen.
         Returns the rows to render, or None when nothing moved since the last tick."""
         self.live = find_live_session(self.sessions_dir)
-        session = analyze(load_codex_session(self.live)) if self.live else None
+        # Codex creates the rollout before writing to it, so a tick can catch it empty
+        # or mid-line and the adapter hands back nothing. That is not a Session yet —
+        # leave the Waterfall as it stands and look again next tick.
+        loaded = load_codex_session(self.live) if self.live else None
+        session = analyze(loaded) if loaded else None
         # Only the Live Session can have moved, so its totals are the whole change
         # signal; the payload is rebuilt only when they actually move. The first tick
         # always renders, so watching an empty directory clears any stale data file.

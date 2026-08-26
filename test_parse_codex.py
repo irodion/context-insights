@@ -511,6 +511,27 @@ class WatchModeTest(unittest.TestCase):
         self.assertIsNotNone(watcher.tick())
         self.assertIsNone(watcher.tick())
 
+    def test_a_rollout_caught_before_its_first_record_is_not_a_session_yet(self):
+        """Codex creates the rollout file before writing to it, so a tick can catch it
+        empty or mid-line. That is not a Session yet: wait for the next tick rather
+        than taking Watch Mode down with it."""
+        sessions = temp_dir(self)
+        a_turn(RolloutFixture(self, sessions, name="rollout-a.jsonl", cwd="/tmp/alpha")).write(
+            modified=2_000_000
+        )
+        watcher = parse_codex.WatchMode(sessions, min_requests=3, include_all=False)
+        watcher.tick()
+
+        # A newer rollout appears, but the opening record is still being written.
+        partial = sessions / "rollout-b.jsonl"
+        partial.write_text('{"timestamp":"2026-03-20T18:30:00Z","type":"session_me')
+        os.utime(partial, (2_000_500, 2_000_500))
+
+        rows = {row["cwd"]: row for row in watcher.tick() or []}
+
+        self.assertEqual(len(rows["alpha"]["r"]), 2)
+        self.assertEqual([row["cwd"] for row in rows.values() if row["live"]], [])
+
     def test_the_first_tick_renders_even_with_nothing_to_watch(self):
         """Watching an empty directory still has to render: skipping the first tick
         would leave whatever a previous `--web` run wrote on screen, and the stale
