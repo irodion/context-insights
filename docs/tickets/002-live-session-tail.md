@@ -38,6 +38,10 @@ Cut-corner architecture (no websockets, no server framework):
   survived the live re-render.
 - Ctrl-C leaves no stray processes. ✅ SIGINT to the real CLI exits 0, prints
   `stopped`, and the port is free immediately after.
+- Switching rollouts does not roll the Waterfall backward. ✅ Session A opens
+  below `--min-requests`, grows to 3 Requests and a 74k break while live, then
+  Session B becomes newest: A keeps all 3 Requests and the break, and exactly one
+  row is flagged live.
 
 ## Non-goals
 
@@ -50,14 +54,25 @@ Cut-corner architecture (no websockets, no server framework):
 analyzed baseline in memory and each tick re-reads one file and splices it in,
 replacing its stale copy. A tick costs one file read.
 
-The baseline's *rows* are built once too (`/simplify` follow-up): they cannot
-change after startup, so a tick builds only the Live Session's row and compares
-that, rather than re-deriving 7.6k request tuples and deep-comparing the whole
-payload every 3s. Same reason `find_live_session()` reads only the opening
-`session_meta` line via `peek_thread_source()` — it needs one field, and full-
-parsing every candidate meant parsing the winner twice per tick. Measured on this
-corpus a tick drops from ~3.4ms to ~1.2ms: small in absolute terms, but the old
-shape scaled with corpus size for information that never changed.
+`find_live_session()` reads only the opening `session_meta` line via
+`peek_thread_source()` — it needs one field, and full-parsing every candidate meant
+parsing the winner twice per tick.
+
+A tick's change signal is the Live Session's own totals (~0.2µs), and the payload
+is rebuilt only when they actually move (~1.4ms over 296 sessions). Deep-comparing
+the whole payload every 3s was work that scaled with corpus size to answer a
+question only one Session could change the answer to.
+
+**Sessions are held by id, latest state wins.** The first cut kept a frozen
+startup snapshot of everything but the Live Session, which was wrong in two ways
+the moment Watch Mode switched rollouts: a Session that had accrued Requests while
+live reverted to its startup state, and one that started below `--min-requests`
+vanished from the Waterfall entirely — bars and totals rolling *backward* while
+watching. `watch()` now keeps a `{session_key: session}` map it updates each tick,
+so anything seen live keeps what it accrued. `waterfall_payload()` stays the only
+place that knows the ordering rule, and it re-ranks from current totals rather
+than from a stale snapshot. `session_key()` gives the id rule one owner, shared
+with the row identity the viewer selects by.
 
 **The Live Session skips subagents.** Naive newest-mtime picks the wrong file: a
 subagent spawned mid-Turn writes *after* the parent, so the chart would jump to a
