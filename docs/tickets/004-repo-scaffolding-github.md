@@ -18,8 +18,9 @@ a GitHub repo on the user's account so the project survives the machine.
   still no packaging), run by a versioned `.githooks/pre-push` and by
   GitHub Actions CI on 3.13 + 3.14.
 - Create GitHub repo `context-insights` on the user's account
-  (`gh repo create --private --source . --push`), push `master` and
-  `prototype/waterfall-variants`.
+  (`gh repo create --private --source . --push`), push the default branch and
+  `prototype/waterfall-variants`. Default branch renamed `master` → `main`
+  on GitHub right after creation.
 
 ## Decisions
 
@@ -40,6 +41,6 @@ a GitHub repo on the user's account so the project survives the machine.
 
 - Fresh clone + `python3 parse_codex.py --web` + open `waterfall.html` works
   by following README alone. ✓
-- `ruff check`, `ruff format --check`, `mypy` are green on `master`. ✓
+- `ruff check`, `ruff format --check`, `mypy` are green on `main`. ✓
 - CI green on 3.13 and 3.14. ✓ (GitHub does not register a workflow added in
   the push that creates a repo — it took a later commit touching `ci.yml`.)
