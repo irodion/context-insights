@@ -120,6 +120,25 @@ class TTLExpiryTest(unittest.TestCase):
 
 
 class HistoryRewriteTest(unittest.TestCase):
+    def test_a_cold_turn_opening_within_the_ttl_window_is_ttl_expiry_not_a_rewrite(self):
+        """A Turn opening cold after minutes of idle is the prefix ageing out, not
+        re-serialization: the provider keeps a prefix for only 5-10 minutes."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=60_000, cached=40_000))
+            .add(token_count(at(20), input_=80_000, cached=60_000))
+            .add(turn_end(at(25)))
+            .add(turn_start(at(440)))  # 7 minutes idle
+            .add(token_count(at(445), input_=80_000, cached=9_600))
+            .add(turn_end(at(450)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
+
     def test_break_opening_a_turn_after_a_short_gap_is_diagnosed_as_history_rewrite(self):
         """Codex re-serializes history at a Turn boundary; the cache was still warm,
         so the prefix diverged rather than expired."""

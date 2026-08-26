@@ -24,7 +24,10 @@ SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 BREAK_RATIO = 0.8  # cached < 80% of expected cache => cache break
 COMPACTION_RATIO = 0.6  # input < 60% of previous input => compaction, not break
 REPLAY_BURST_MS = 200  # subagent replay: consecutive events closer than this
-TTL_GAP_S = 600  # idle seconds after which the provider's prompt cache has expired
+# Idle seconds after which a cold prefix is read as expired rather than rewritten.
+# Providers keep a prefix ~5-10 min; cold Turn openings in this corpus cluster at
+# 5-10 min, so the low end is the honest cut — above it, expiry explains the miss.
+TTL_GAP_S = 300
 COLD_RETENTION = 0.25  # cached < 25% of expected cache => the cache went cold, not diverged
 WARMUP_GAP_S = 60  # a cold Request's cache write can still be in flight this long after
 
