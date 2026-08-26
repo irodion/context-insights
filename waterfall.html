@@ -171,12 +171,15 @@ function render() {
 
 // Watch Mode: re-read the generated data file and re-render. Only over http —
 // opened from disk there is nothing rewriting the file, and fetch() is blocked anyway.
+const DECL = "const SESSIONS = ";   // the one line of waterfall_data.js we parse back
 let lastData = null;
 async function poll() {
   try {
     const text = await (await fetch("waterfall_data.js?t=" + Date.now(), { cache: "no-store" })).text();
     if (text === lastData) return;
-    const next = new Function(text + "\nreturn SESSIONS;")();
+    // The payload is JSON wrapped in a declaration, so read it as data rather than
+    // compiling the whole file as a function on every change.
+    const next = JSON.parse(text.slice(text.indexOf(DECL) + DECL.length, text.lastIndexOf(";")));
     lastData = text;
     sessions = next;
     if (!sessions.some(s => s.id === state.id)) state.id = sessions.length ? sessions[0].id : null;

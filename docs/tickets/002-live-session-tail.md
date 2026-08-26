@@ -50,6 +50,15 @@ Cut-corner architecture (no websockets, no server framework):
 analyzed baseline in memory and each tick re-reads one file and splices it in,
 replacing its stale copy. A tick costs one file read.
 
+The baseline's *rows* are built once too (`/simplify` follow-up): they cannot
+change after startup, so a tick builds only the Live Session's row and compares
+that, rather than re-deriving 7.6k request tuples and deep-comparing the whole
+payload every 3s. Same reason `find_live_session()` reads only the opening
+`session_meta` line via `peek_thread_source()` — it needs one field, and full-
+parsing every candidate meant parsing the winner twice per tick. Measured on this
+corpus a tick drops from ~3.4ms to ~1.2ms: small in absolute terms, but the old
+shape scaled with corpus size for information that never changed.
+
 **The Live Session skips subagents.** Naive newest-mtime picks the wrong file: a
 subagent spawned mid-Turn writes *after* the parent, so the chart would jump to a
 Session you are not sitting in front of. `find_live_session()` walks rollouts in

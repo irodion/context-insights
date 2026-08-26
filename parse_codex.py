@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import collections
 import functools
 import hashlib
 import http.server
@@ -82,7 +83,7 @@ def turn_context_fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
     for key, value in payload.items():
         if key in TURN_CONTEXT_VOLATILE:
             continue
-        if isinstance(value, str | int | float | bool | None.__class__) and (
+        if (value is None or isinstance(value, str | int | float | bool)) and (
             len(str(value)) <= FINGERPRINT_SCALAR_LEN
         ):
             fingerprint[key] = value
@@ -253,7 +254,7 @@ def turn_context_changes(
     ]
 
 
-def explain_breaks(session, ttl_gap_s=TTL_GAP_S):
+def explain_breaks(session):
     """Diagnose every Cache Break in an analyzed session.
 
     Returns one dict per break: index, cause, gap_s, retention, rebilled, detail.
@@ -266,19 +267,20 @@ def explain_breaks(session, ttl_gap_s=TTL_GAP_S):
         expected = r["expected_cache"]
         retention = r["cached"] / expected if expected else 0.0
         gap = r.get("gap_s", 0.0)
-        ctx_changes = turn_context_changes(session, reqs[i - 1] if i else None, r)
+        previous = reqs[i - 1] if i else None
+        ctx_changes = turn_context_changes(session, previous, r)
         if ctx_changes:
             cause = CAUSE_TURN_CONTEXT
             detail = "changed between Turns: " + ", ".join(
                 f"{key} {before} -> {after}" for key, before, after in ctx_changes
             )
-        elif gap >= ttl_gap_s and retention < COLD_RETENTION:
+        elif gap >= TTL_GAP_S and retention < COLD_RETENTION:
             cause = CAUSE_TTL_EXPIRY
             detail = (
                 f"{fmt_duration(gap)} idle before this Request; the cached prefix "
                 f"had expired, so the whole prompt was re-billed"
             )
-        elif gap <= WARMUP_GAP_S and ran_cold(reqs[i - 1] if i else None):
+        elif gap <= WARMUP_GAP_S and ran_cold(previous):
             cause = CAUSE_CACHE_WARMUP
             detail = (
                 f"{fmt_duration(gap)} after a cold Request, whose cache write "
@@ -391,14 +393,42 @@ def write_waterfall_data(payload: list[dict[str, Any]]) -> Path:
     return out
 
 
+def load_sessions(sessions_dir: Path, min_requests: int, include_all: bool) -> list[dict[str, Any]]:
+    """Every rollout under `sessions_dir`, normalized and analyzed. Sessions too short
+    to say anything are dropped, as are subagent ones unless `include_all`."""
+    sessions = []
+    for path in sorted(sessions_dir.rglob("rollout-*.jsonl")):
+        s = load_codex_session(path)
+        if not s or len(s["requests"]) < min_requests:
+            continue
+        if not include_all and s["thread_source"] != "user":
+            continue
+        sessions.append(analyze(s))
+    return sessions
+
+
+def peek_thread_source(path: Path) -> str:
+    """The Thread Source of a rollout, read from its opening `session_meta` line.
+    Watch Mode asks this of several files every few seconds, so it must not pay for
+    a full parse; Codex writes `session_meta` first, and anything else reads as
+    `user`, matching load_codex_session()'s default."""
+    try:
+        with open(path, errors="replace") as f:
+            ev = json.loads(f.readline())
+    except (OSError, json.JSONDecodeError):
+        return "user"
+    if ev.get("type") != "session_meta":
+        return "user"
+    return (ev.get("payload") or {}).get("thread_source") or "user"
+
+
 def find_live_session(sessions_dir: Path) -> Path | None:
     """The Live Session: the newest-modified rollout you are sitting in front of.
     Subagent rollouts are skipped — a child spawned mid-Turn writes last, but it is
     not the Session being worked in."""
     rollouts = sorted(sessions_dir.rglob("rollout-*.jsonl"), key=lambda p: -p.stat().st_mtime)
     for path in rollouts:
-        session = load_codex_session(path)
-        if session and session["thread_source"] == "user":
+        if peek_thread_source(path) == "user":
             return path
     return None
 
@@ -420,27 +450,15 @@ def serve_waterfall(directory: Path, port: int) -> tuple[http.server.HTTPServer,
     return httpd, f"http://{WATCH_HOST}:{bound_port}/waterfall.html"
 
 
-def watch(
-    sessions_dir: Path,
-    port: int = WATCH_PORT,
-    min_requests: int = 3,
-    include_all: bool = False,
-    interval: float = WATCH_INTERVAL_S,
-) -> None:
+def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -> None:
     """Follow the Live Session and rebuild the Waterfall while you work.
 
-    The rest of the corpus is parsed once, at startup; each tick re-reads only the
-    Live Session and splices it back in, so a poll costs one file read.
+    The rest of the corpus is parsed once, at startup, and its rows never change
+    after that; each tick re-reads only the Live Session, so a tick costs one file
+    read and builds one row.
     """
-    baseline = [
-        s
-        for path in sorted(sessions_dir.rglob("rollout-*.jsonl"))
-        if (s := load_codex_session(path))
-        and len(s["requests"]) >= min_requests
-        and (include_all or s["thread_source"] == "user")
-    ]
-    for session in baseline:
-        analyze(session)
+    baseline = load_sessions(sessions_dir, min_requests, include_all)
+    baseline_rows = waterfall_payload(baseline)
     print(f"parsed {len(baseline)} sessions from {sessions_dir}", file=sys.stderr)
 
     httpd, url = serve_waterfall(Path(__file__).parent, port)
@@ -448,7 +466,7 @@ def watch(
     print("watching for cache breaks — Ctrl-C to stop", file=sys.stderr, flush=True)
 
     followed: Path | None = None
-    previous: list[dict[str, Any]] | None = None
+    previous: dict[str, Any] | None = None
     try:
         while True:
             live = find_live_session(sessions_dir)
@@ -457,14 +475,14 @@ def watch(
                 print(f"following {name}", file=sys.stderr, flush=True)
                 followed = live
             session = analyze(load_codex_session(live)) if live else None
-            sessions = [s for s in baseline if not live or s["file"] != str(live)]
-            if session:
-                sessions.append(session)
-            payload = waterfall_payload(sessions, live=live)
-            if payload != previous:
-                write_waterfall_data(payload)
-                previous = payload
-            time.sleep(interval)
+            row = waterfall_payload([session], live=live)[0] if session else None
+            if row != previous:
+                stale = row["id"] if row else None
+                write_waterfall_data(
+                    ([row] if row else []) + [r for r in baseline_rows if r["id"] != stale]
+                )
+                previous = row
+            time.sleep(WATCH_INTERVAL_S)
     except KeyboardInterrupt:
         print("\nstopped", file=sys.stderr)
     finally:
@@ -534,11 +552,11 @@ def main():
                 f"the previous request, {d['retention']:.0%} of the prefix kept)"
             )
             print(f"      {d['detail']}")
-        by_cause: dict[str, int] = {}
+        by_cause = collections.Counter[str]()
         for d in diagnoses:
-            by_cause[d["cause"]] = by_cause.get(d["cause"], 0) + d["rebilled"]
+            by_cause[d["cause"]] += d["rebilled"]
         print("\nre-billed by cause:")
-        for cause, cost in sorted(by_cause.items(), key=lambda kv: -kv[1]):
+        for cause, cost in by_cause.most_common():
             print(f"  {fmt_tokens(cost):>7}  {cause}")
         return
 
@@ -562,14 +580,7 @@ def main():
             )
         return
 
-    sessions = []
-    for path in sorted(Path(args.dir).rglob("rollout-*.jsonl")):
-        s = load_codex_session(path)
-        if not s or len(s["requests"]) < args.min_requests:
-            continue
-        if not args.all and s["thread_source"] != "user":
-            continue
-        sessions.append(analyze(s))
+    sessions = load_sessions(Path(args.dir), args.min_requests, args.all)
 
     if args.web:
         compact = waterfall_payload(sessions)
