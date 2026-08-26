@@ -90,10 +90,16 @@ selection through it. Same reason the payload carries `live`: the page cannot
 otherwise tell which row is being tailed, and pinning-to-first is not evidence.
 
 **Polling, not websockets.** The page re-fetches `waterfall_data.js` every 3s,
-evaluates it in a `Function` and re-renders only when the bytes changed. Writes
-are atomic (`tmp.replace`) so a fetch cannot catch a half-written file; a parse
-failure is swallowed and retried next tick. Over `file://` nothing polls, so the
-static path is unchanged.
+parses it and re-renders only when the bytes changed. Writes are atomic
+(`tmp.replace`) so a fetch cannot catch a half-written file; a parse failure is
+swallowed and retried next tick. Over `file://` nothing polls, so the static path
+is unchanged.
+
+`setInterval` does not serialize its calls, so a slow fetch can land after a newer
+one and overwrite the screen with an older payload. Each poll takes a sequence
+number before awaiting and drops its response if a later poll has since started.
+Reproduced by forcing the interleaving in the browser: without the guard the late,
+older payload wins; with it, it is discarded.
 
 **Scroll and focus survive the re-render.** `render()` still swaps `innerHTML`
 wholesale, so it now captures scroll/focus/caret first and restores after. Bars
