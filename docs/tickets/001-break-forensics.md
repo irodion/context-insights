@@ -28,6 +28,18 @@ changed in the prompt prefix, e.g.:
   diff the id-sequence of items before the break against the prior request.
 - Surface the verdict in the waterfall tooltip later (separate ticket if big).
 
+## Also in scope (added 2026-08-26)
+
+- **Idle-gap advisor**: one summary line converting the diagnosis into
+  behavior — "sessions resumed after >X min idle cost you N tokens
+  (re-billed); a fresh session would have been cheaper or equal." Compute
+  from TTL-expiry breaks; X derived from observed gap/break correlation,
+  not hardcoded.
+- **Reading**: skim "Don't Break the Cache" (arXiv, 500+ agent sessions,
+  41-80% cost reduction) before building — steal their break-cause taxonomy
+  if richer than our three categories; note their 7-15% typical hit rate as
+  a comparison baseline for our output.
+
 ## Acceptance
 
 - Running `--explain` on the easycall 2026-03-20 session (requests 16–19,
