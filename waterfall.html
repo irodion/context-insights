@@ -120,10 +120,12 @@ function render() {
     .filter(([s]) => !state.filter || (s.cwd + " " + s.date + " " + (s.model || "")).toLowerCase().includes(state.filter));
   const chosen = sessions.findIndex(s => s.id === state.id);
   const sel = sessions[chosen >= 0 ? chosen : 0];
-  const max = Math.max(...sel.r.map(r => r[IN]));
+  // A Session that Watch Mode picked up before its first API call has no Requests
+  // yet, and an unguarded max would be -Infinity.
+  const max = Math.max(1, ...sel.r.map(r => r[IN]));
   const h = v => Math.max(v ? 2 : 0, Math.round(366 * v / max));
   app.innerHTML = `<h1>Context Insights — Waterfall</h1>
-  <div class="sub">${sessions.length} Codex sessions · overall hit rate ${Math.round(100*t.ca/t.inp)}% ·
+  <div class="sub">${sessions.length} Codex sessions · overall hit rate ${t.inp ? Math.round(100*t.ca/t.inp) : 0}% ·
     <span class="pill-crit">${t.br} cache breaks, ${fmt(t.rb)} tokens re-billed</span></div>
   <div class="legend">
     <span style="--c:var(--cached)">cached input</span>
@@ -149,7 +151,9 @@ function render() {
           ${r[RB] ? `<div class="seg rebill" style="height:${h(r[RB])}px"></div>` : ""}
         </div>`;
       }).join("") + `</div>
-      <div style="color:var(--muted);margin-top:6px">requests → (y = input tokens, max ${fmt(max)})</div>
+      <div style="color:var(--muted);margin-top:6px">${sel.r.length
+        ? `requests → (y = input tokens, max ${fmt(max)})`
+        : "no requests yet — nothing has been billed on this session"}</div>
     </div>
   </div>`;
   app.querySelectorAll(".sessrow").forEach(el =>
