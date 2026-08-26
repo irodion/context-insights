@@ -1,12 +1,19 @@
-"""Tests for Cache Break forensics (ticket 001).
+"""Tests for Cache Break forensics (ticket 001) and the Live Session tail (002).
 
-Seam under test: `explain_breaks()` — an analyzed Session in, one diagnosis per
-Cache Break out. Fixtures are synthetic Codex rollouts written to a temp file
-and read back through the real adapter, so the tests exercise the public path
-(`load_codex_session` -> `analyze` -> `explain_breaks`) rather than internals.
+Seams under test:
+
+- `explain_breaks()` — an analyzed Session in, one diagnosis per Cache Break out.
+- `find_live_session()` — a sessions directory in, the rollout Watch Mode should
+  follow out.
+- `waterfall_payload()` — analyzed Sessions in, the rows the Waterfall renders out.
+
+Fixtures are synthetic Codex rollouts written to a temp file and read back through
+the real adapter, so the tests exercise the public path (`load_codex_session` ->
+`analyze` -> ...) rather than internals.
 """
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -66,22 +73,34 @@ def turn_end(ts: str) -> dict:
     return event(ts, "event_msg", {"type": "task_complete"})
 
 
+def temp_dir(testcase: unittest.TestCase) -> Path:
+    tmp = tempfile.TemporaryDirectory()
+    testcase.addCleanup(tmp.cleanup)
+    return Path(tmp.name)
+
+
 class RolloutFixture:
     """Builds a synthetic rollout-*.jsonl and loads it through the adapter."""
 
-    def __init__(self, testcase: unittest.TestCase) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        testcase.addCleanup(tmp.cleanup)
-        self.path = Path(tmp.name) / "rollout-2026-03-20T18-00-00-fixture.jsonl"
+    def __init__(
+        self,
+        testcase: unittest.TestCase,
+        directory: Path | None = None,
+        name: str = "rollout-2026-03-20T18-00-00-fixture.jsonl",
+        thread_source: str = "user",
+        cwd: str = "/tmp/proj",
+    ) -> None:
+        self.path = (directory or temp_dir(testcase)) / name
         self.events: list[dict] = [
             event(
                 at(0),
                 "session_meta",
                 {
-                    "id": "019d0c8f-fixture",
+                    "id": name,
                     "timestamp": at(0),
-                    "cwd": "/tmp/proj",
-                    "source": {"type": "user"},
+                    "cwd": cwd,
+                    "source": "vscode",
+                    "thread_source": thread_source,
                 },
             )
         ]
@@ -91,9 +110,25 @@ class RolloutFixture:
             self.events.extend(e if isinstance(e, list) else [e])
         return self
 
-    def analyzed(self) -> dict:
+    def write(self, modified: float | None = None) -> Path:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("\n".join(json.dumps(e) for e in self.events) + "\n")
-        return parse_codex.analyze(parse_codex.load_codex_session(self.path))
+        if modified is not None:
+            os.utime(self.path, (modified, modified))
+        return self.path
+
+    def analyzed(self) -> dict:
+        return parse_codex.analyze(parse_codex.load_codex_session(self.write()))
+
+
+def a_turn(fixture: RolloutFixture) -> RolloutFixture:
+    """The smallest believable Turn: two clean Requests."""
+    return (
+        fixture.add(turn_start(at(0)))
+        .add(token_count(at(10), input_=60_000, cached=40_000))
+        .add(token_count(at(20), input_=80_000, cached=60_000))
+        .add(turn_end(at(25)))
+    )
 
 
 class TTLExpiryTest(unittest.TestCase):
@@ -348,6 +383,105 @@ class MidTurnBreakTest(unittest.TestCase):
 
         self.assertEqual(len(diagnoses), 1)
         self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_UNKNOWN)
+
+
+class FindLiveSessionTest(unittest.TestCase):
+    """Watch Mode follows the Live Session: the rollout being written to right now."""
+
+    def test_the_live_session_is_the_most_recently_modified_rollout(self):
+        sessions = temp_dir(self)
+        stale = RolloutFixture(self, sessions, name="rollout-2026-03-20T09-00-00-stale.jsonl")
+        a_turn(stale).write(modified=1_000_000)
+        current = a_turn(
+            RolloutFixture(self, sessions, name="rollout-2026-03-20T18-00-00-current.jsonl")
+        ).write(modified=2_000_000)
+
+        self.assertEqual(parse_codex.find_live_session(sessions), current)
+
+    def test_a_subagent_rollout_touched_more_recently_is_not_the_live_session(self):
+        """A subagent spawned mid-Turn writes last, but the Session you are sitting in
+        front of is the one worth watching."""
+        sessions = temp_dir(self)
+        mine = a_turn(
+            RolloutFixture(self, sessions, name="rollout-2026-03-20T18-00-00-mine.jsonl")
+        ).write(modified=2_000_000)
+        a_turn(
+            RolloutFixture(
+                self,
+                sessions,
+                name="rollout-2026-03-20T18-05-00-child.jsonl",
+                thread_source="subagent",
+            )
+        ).write(modified=2_000_100)
+
+        self.assertEqual(parse_codex.find_live_session(sessions), mine)
+
+
+def a_costly_turn(fixture: RolloutFixture, input_: int, cached: int) -> RolloutFixture:
+    """A Turn that opens with a Cache Break, re-billing `input_ - cached` tokens."""
+    return (
+        a_turn(fixture)
+        .add(turn_start(at(110)))
+        .add(token_count(at(115), input_=input_, cached=cached))
+        .add(turn_end(at(120)))
+    )
+
+
+class WaterfallPayloadTest(unittest.TestCase):
+    def test_the_live_session_is_pinned_first_and_the_rest_rank_by_rebilled(self):
+        """Watch Mode wants the Session you are in on screen, whatever it has cost
+        so far; the others still compete on Re-billed Tokens."""
+        sessions = temp_dir(self)
+        live = a_turn(RolloutFixture(self, sessions, name="rollout-a.jsonl", cwd="/tmp/live"))
+        costly = a_costly_turn(
+            RolloutFixture(self, sessions, name="rollout-b.jsonl", cwd="/tmp/costly"),
+            input_=80_000,
+            cached=13_000,
+        )
+        middling = a_costly_turn(
+            RolloutFixture(self, sessions, name="rollout-c.jsonl", cwd="/tmp/middling"),
+            input_=80_000,
+            cached=50_000,
+        )
+
+        payload = parse_codex.waterfall_payload(
+            [costly.analyzed(), live.analyzed(), middling.analyzed()], live=live.path
+        )
+
+        self.assertEqual([row["cwd"] for row in payload], ["live", "costly", "middling"])
+
+    def test_a_row_keeps_its_id_when_the_ranking_moves_it(self):
+        """Watch Mode rewrites the payload every few seconds and a Session can change
+        rank as it accrues Re-billed Tokens. Rows carry a Session id so the viewer can
+        hold its selection on the same Session rather than on a row number."""
+        sessions = temp_dir(self)
+        live = a_turn(RolloutFixture(self, sessions, name="rollout-a.jsonl", cwd="/tmp/live"))
+        costly = a_costly_turn(
+            RolloutFixture(self, sessions, name="rollout-b.jsonl", cwd="/tmp/costly"),
+            input_=80_000,
+            cached=13_000,
+        )
+        analyzed = [costly.analyzed(), live.analyzed()]
+
+        pinned = parse_codex.waterfall_payload(analyzed, live=live.path)
+        unpinned = parse_codex.waterfall_payload(analyzed)
+
+        self.assertEqual(pinned[0]["id"], unpinned[1]["id"])
+        self.assertEqual(pinned[1]["id"], unpinned[0]["id"])
+
+    def test_only_the_live_session_is_flagged_live(self):
+        """The Waterfall badges the Session it is tailing, so a break you are watching
+        for is distinguishable from history. Without Watch Mode nothing is live."""
+        sessions = temp_dir(self)
+        live = a_turn(RolloutFixture(self, sessions, name="rollout-a.jsonl", cwd="/tmp/live"))
+        other = a_turn(RolloutFixture(self, sessions, name="rollout-b.jsonl", cwd="/tmp/other"))
+        analyzed = [other.analyzed(), live.analyzed()]
+
+        pinned = parse_codex.waterfall_payload(analyzed, live=live.path)
+        unpinned = parse_codex.waterfall_payload(analyzed)
+
+        self.assertEqual([row.get("live", False) for row in pinned], [True, False])
+        self.assertEqual([row.get("live", False) for row in unpinned], [False, False])
 
 
 if __name__ == "__main__":

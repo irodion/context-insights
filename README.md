@@ -22,6 +22,7 @@ python3 parse_codex.py                              # all sessions, worst first
 python3 parse_codex.py --session ~/.codex/sessions/2026/.../rollout-*.jsonl
 python3 parse_codex.py --explain ~/.codex/sessions/2026/.../rollout-*.jsonl
 python3 parse_codex.py --web && open waterfall.html # the waterfall view
+python3 parse_codex.py --watch                      # ...updating while you work
 ```
 
 `parse_codex.py` prints one row per session — requests, cache breaks, hit rate,
@@ -29,6 +30,12 @@ tokens re-billed — then an overall total and an idle-gap advisor line. `--sess
 expands a single rollout into per-request bars, marking each request `hit`,
 `break` (`!`) or `compaction` (`~`). `--web` regenerates `waterfall_data.js`, which
 `waterfall.html` reads directly from disk (no server).
+
+`--watch` follows the session you are currently in. It serves the waterfall on
+`http://127.0.0.1:8787/waterfall.html` (`--port` to move it), re-reads the live
+rollout every few seconds and re-renders the page in place — so a cache break
+shows up red while you are still in the turn that caused it. The live session is
+pinned to the top of the list and badged. Ctrl-C stops it.
 
 `--explain` says *why* each break happened, and what it cost:
 
