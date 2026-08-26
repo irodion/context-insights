@@ -457,39 +457,62 @@ def serve_waterfall(directory: Path, port: int) -> tuple[http.server.HTTPServer,
     return httpd, f"http://{WATCH_HOST}:{bound_port}/waterfall.html"
 
 
-def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -> None:
-    """Follow the Live Session and rebuild the Waterfall while you work.
+class WatchMode:
+    """The state Watch Mode carries between ticks: every Session it has seen, newest
+    state per Session.
 
-    The corpus is parsed once, at startup; each tick re-reads only the Live Session,
-    so a tick costs one file read. Sessions are held by id, latest state wins: a
-    Session keeps everything it accrued while live once Watch Mode moves on to a
-    newer one — including a Session that was too short to make the startup cut.
+    The corpus is parsed once, at construction; a tick re-reads only the Live Session,
+    so it costs one file read. Sessions are held by id and the latest state wins, so a
+    Session keeps everything it accrued while live once a newer one takes over —
+    including one that was too short to make the startup cut. Rebuilding from a frozen
+    startup snapshot instead would roll bars and totals backward on every switch.
     """
-    seen = {session_key(s): s for s in load_sessions(sessions_dir, min_requests, include_all)}
-    print(f"parsed {len(seen)} sessions from {sessions_dir}", file=sys.stderr)
+
+    def __init__(self, sessions_dir: Path, min_requests: int, include_all: bool) -> None:
+        self.sessions_dir = sessions_dir
+        self.seen = {
+            session_key(s): s for s in load_sessions(sessions_dir, min_requests, include_all)
+        }
+        self.live: Path | None = None
+        self._signal: tuple[str, dict[str, Any]] | None = None
+        self._ticked = False
+
+    def tick(self) -> list[dict[str, Any]] | None:
+        """One iteration: re-read the Live Session and fold it into what we have seen.
+        Returns the rows to render, or None when nothing moved since the last tick."""
+        self.live = find_live_session(self.sessions_dir)
+        session = analyze(load_codex_session(self.live)) if self.live else None
+        # Only the Live Session can have moved, so its totals are the whole change
+        # signal; the payload is rebuilt only when they actually move. The first tick
+        # always renders, so watching an empty directory clears any stale data file.
+        signal = (str(self.live), session["analysis"]) if session else None
+        if self._ticked and signal == self._signal:
+            return None
+        self._ticked, self._signal = True, signal
+        if session:
+            self.seen[session_key(session)] = session
+        return waterfall_payload(list(self.seen.values()), live=self.live)
+
+
+def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -> None:
+    """Follow the Live Session and rebuild the Waterfall while you work."""
+    watcher = WatchMode(sessions_dir, min_requests, include_all)
+    print(f"parsed {len(watcher.seen)} sessions from {sessions_dir}", file=sys.stderr)
 
     httpd, url = serve_waterfall(Path(__file__).parent, port)
     print(url, flush=True)
     print("watching for cache breaks — Ctrl-C to stop", file=sys.stderr, flush=True)
 
     followed: Path | None = None
-    previous: tuple[str, dict[str, Any]] | None = None
     try:
         while True:
-            live = find_live_session(sessions_dir)
-            if live != followed:
-                name = live.name if live else "(no session yet)"
+            rows = watcher.tick()
+            if watcher.live != followed:
+                name = watcher.live.name if watcher.live else "(no session yet)"
                 print(f"following {name}", file=sys.stderr, flush=True)
-                followed = live
-            session = analyze(load_codex_session(live)) if live else None
-            # Only the Live Session can have moved, so its totals are the whole
-            # change signal; the payload is rebuilt only when they actually move.
-            current = (str(live), session["analysis"]) if session else None
-            if current != previous:
-                previous = current
-                if session:
-                    seen[session_key(session)] = session
-                write_waterfall_data(waterfall_payload(list(seen.values()), live=live))
+                followed = watcher.live
+            if rows is not None:
+                write_waterfall_data(rows)
             time.sleep(WATCH_INTERVAL_S)
     except KeyboardInterrupt:
         print("\nstopped", file=sys.stderr)

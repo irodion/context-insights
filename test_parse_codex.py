@@ -6,6 +6,9 @@ Seams under test:
 - `find_live_session()` — a sessions directory in, the rollout Watch Mode should
   follow out.
 - `waterfall_payload()` — analyzed Sessions in, the rows the Waterfall renders out.
+- `WatchMode.tick()` — one Watch Mode iteration in, the rows to render out (or None
+  when nothing moved). What survives across ticks is the point: a Session must keep
+  what it accrued while live once Watch Mode moves on to a newer one.
 
 Fixtures are synthetic Codex rollouts written to a temp file and read back through
 the real adapter, so the tests exercise the public path (`load_codex_session` ->
@@ -462,6 +465,59 @@ class WaterfallPayloadTest(unittest.TestCase):
 
         self.assertEqual([row.get("live", False) for row in pinned], [True, False])
         self.assertEqual([row.get("live", False) for row in unpinned], [False, False])
+
+
+class WatchModeTest(unittest.TestCase):
+    """Seam: `WatchMode.tick()` — one Watch Mode iteration in, the rows the Waterfall
+    should render out, or None when nothing moved and the file need not be rewritten."""
+
+    def test_a_session_seen_live_survives_a_switch_to_a_newer_one(self):
+        """alpha opens too short to make the startup cut, then does real work while it
+        is the Live Session. Once beta takes over, alpha must still be on the chart
+        with everything it accrued: a Waterfall whose bars and totals roll *backward*
+        is worse than one that never updated."""
+        sessions = temp_dir(self)
+        alpha = RolloutFixture(self, sessions, name="rollout-a.jsonl", cwd="/tmp/alpha")
+        alpha.add(turn_start(at(0)), token_count(at(10), input_=60_000, cached=40_000))
+        alpha.write(modified=2_000_000)
+        watcher = parse_codex.WatchMode(sessions, min_requests=3, include_all=False)
+        watcher.tick()
+
+        alpha.add(
+            token_count(at(20), input_=80_000, cached=60_000),
+            turn_end(at(25)),
+            turn_start(at(1_300)),
+            token_count(at(1_310), input_=92_000, cached=6_000),
+        ).write(modified=2_000_100)
+        watcher.tick()
+
+        a_turn(RolloutFixture(self, sessions, name="rollout-b.jsonl", cwd="/tmp/beta")).write(
+            modified=2_000_500
+        )
+        rows = {row["cwd"]: row for row in watcher.tick() or []}
+
+        self.assertEqual(len(rows["alpha"]["r"]), 3)
+        self.assertEqual(rows["alpha"]["a"]["breaks"], 1)
+        self.assertEqual(rows["alpha"]["a"]["rebilled_tokens"], 74_000)
+        self.assertEqual([row["cwd"] for row in rows.values() if row["live"]], ["beta"])
+
+    def test_a_tick_that_found_nothing_new_asks_for_no_rewrite(self):
+        """The page re-renders whenever the data file changes, so a tick with nothing
+        to report must not cause a rewrite."""
+        sessions = temp_dir(self)
+        a_turn(RolloutFixture(self, sessions, name="rollout-a.jsonl")).write(modified=2_000_000)
+        watcher = parse_codex.WatchMode(sessions, min_requests=3, include_all=False)
+
+        self.assertIsNotNone(watcher.tick())
+        self.assertIsNone(watcher.tick())
+
+    def test_the_first_tick_renders_even_with_nothing_to_watch(self):
+        """Watching an empty directory still has to render: skipping the first tick
+        would leave whatever a previous `--web` run wrote on screen, and the stale
+        corpus would read as live."""
+        watcher = parse_codex.WatchMode(temp_dir(self), min_requests=3, include_all=False)
+
+        self.assertEqual(watcher.tick(), [])
 
 
 if __name__ == "__main__":
