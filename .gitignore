@@ -1,2 +1,6 @@
 waterfall_data.js
 .claude/settings.local.json
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.venv/

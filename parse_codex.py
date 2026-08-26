@@ -9,18 +9,20 @@ Usage:
   ./parse_codex.py --session <file>       # per-request detail for one rollout
   ./parse_codex.py --json out.json        # dump normalized sessions as JSON
 """
+
 import argparse
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 # Thresholds (heuristics, tune freely)
-BREAK_RATIO = 0.8       # cached < 80% of expected cache => cache break
+BREAK_RATIO = 0.8  # cached < 80% of expected cache => cache break
 COMPACTION_RATIO = 0.6  # input < 60% of previous input => compaction, not break
-REPLAY_BURST_MS = 200   # subagent replay: consecutive events closer than this
+REPLAY_BURST_MS = 200  # subagent replay: consecutive events closer than this
 
 
 def parse_ts(s):
@@ -29,9 +31,9 @@ def parse_ts(s):
 
 def load_codex_session(path):
     """Codex adapter: rollout-*.jsonl -> normalized session dict."""
-    meta = {}
+    meta: dict[str, Any] = {}
     model = None
-    requests = []
+    requests: list[dict[str, Any]] = []
     with open(path, errors="replace") as f:
         for line in f:
             try:
@@ -49,15 +51,17 @@ def load_codex_session(path):
                 last = info.get("last_token_usage")
                 if not last:
                     continue
-                requests.append({
-                    "ts": ev.get("timestamp"),
-                    "input": last.get("input_tokens", 0),
-                    "cached": last.get("cached_input_tokens", 0),
-                    "cache_write": last.get("cache_write_input_tokens", 0),
-                    "output": last.get("output_tokens", 0),
-                    "total_input": (info.get("total_token_usage") or {}).get("input_tokens", 0),
-                    "context_window": info.get("model_context_window"),
-                })
+                requests.append(
+                    {
+                        "ts": ev.get("timestamp"),
+                        "input": last.get("input_tokens", 0),
+                        "cached": last.get("cached_input_tokens", 0),
+                        "cache_write": last.get("cache_write_input_tokens", 0),
+                        "output": last.get("output_tokens", 0),
+                        "total_input": (info.get("total_token_usage") or {}).get("input_tokens", 0),
+                        "context_window": info.get("model_context_window"),
+                    }
+                )
     if not meta and not requests:
         return None
     return {
@@ -134,7 +138,9 @@ def analyze(session):
 
 
 def fmt_tokens(n):
-    return f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n/1000:.0f}k" if n >= 1000 else str(n)
+    return (
+        f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1000:.0f}k" if n >= 1000 else str(n)
+    )
 
 
 def main():
@@ -143,8 +149,9 @@ def main():
     ap.add_argument("--all", action="store_true", help="include subagent/other sessions")
     ap.add_argument("--session", help="analyze a single rollout file in detail")
     ap.add_argument("--json", help="write normalized+analyzed sessions to this file")
-    ap.add_argument("--web", action="store_true",
-                    help="write waterfall_data.js next to waterfall.html")
+    ap.add_argument(
+        "--web", action="store_true", help="write waterfall_data.js next to waterfall.html"
+    )
     ap.add_argument("--min-requests", type=int, default=3)
     args = ap.parse_args()
 
@@ -152,15 +159,20 @@ def main():
         s = analyze(load_codex_session(Path(args.session)))
         a = s["analysis"]
         print(f"{s['session_id']}  {s['model'] or '?'}  {s['thread_source']}  {s['cwd']}")
-        print(f"requests={a['requests']} breaks={a['breaks']} compactions={a['compactions']} "
-              f"hit_rate={a['hit_rate']:.0%} rebilled={fmt_tokens(a['rebilled_tokens'])}")
+        print(
+            f"requests={a['requests']} breaks={a['breaks']} compactions={a['compactions']} "
+            f"hit_rate={a['hit_rate']:.0%} rebilled={fmt_tokens(a['rebilled_tokens'])}"
+        )
         for i, r in enumerate(s["requests"]):
             mark = {"first": " ", "hit": " ", "break": "!", "compaction": "~"}[r["kind"]]
             bar_n = min(60, r["input"] // 5000)
             cached_n = min(bar_n, int(bar_n * (r["cached"] / r["input"])) if r["input"] else 0)
             bar = "█" * cached_n + "░" * (bar_n - cached_n)
-            print(f"{i:3d} {mark} {r['kind']:<10} in={fmt_tokens(r['input']):>7} "
-                  f"cached={fmt_tokens(r['cached']):>7} rebilled={fmt_tokens(r['rebilled']):>7} {bar}")
+            print(
+                f"{i:3d} {mark} {r['kind']:<10} in={fmt_tokens(r['input']):>7} "
+                f"cached={fmt_tokens(r['cached']):>7} "
+                f"rebilled={fmt_tokens(r['rebilled']):>7} {bar}"
+            )
         return
 
     sessions = []
@@ -175,17 +187,30 @@ def main():
     if args.web:
         kind_code = {"first": 0, "hit": 1, "break": 2, "compaction": 3}
         by_rebilled = sorted(sessions, key=lambda s: -s["analysis"]["rebilled_tokens"])
-        compact = [{
-            "date": (s["started"] or "")[:10],
-            "model": s["model"],
-            "cwd": ((s["cwd"] or "").rstrip("/").split("/")[-1]) or s["cwd"],
-            "a": s["analysis"],
-            "r": [[r["input"], r["cached"], r["rebilled"], kind_code[r["kind"]],
-                   (r["ts"] or "")[11:16]] for r in s["requests"]],
-        } for s in by_rebilled]
+        compact = [
+            {
+                "date": (s["started"] or "")[:10],
+                "model": s["model"],
+                "cwd": ((s["cwd"] or "").rstrip("/").split("/")[-1]) or s["cwd"],
+                "a": s["analysis"],
+                "r": [
+                    [
+                        r["input"],
+                        r["cached"],
+                        r["rebilled"],
+                        kind_code[r["kind"]],
+                        (r["ts"] or "")[11:16],
+                    ]
+                    for r in s["requests"]
+                ],
+            }
+            for s in by_rebilled
+        ]
         out = Path(__file__).parent / "waterfall_data.js"
-        out.write_text("// generated by parse_codex.py --web; regenerate, don't edit\n"
-                       "const SESSIONS = " + json.dumps(compact, separators=(",", ":")) + ";\n")
+        out.write_text(
+            "// generated by parse_codex.py --web; regenerate, don't edit\n"
+            "const SESSIONS = " + json.dumps(compact, separators=(",", ":")) + ";\n"
+        )
         print(f"wrote {len(compact)} sessions to {out}", file=sys.stderr)
 
     if args.json:
@@ -196,8 +221,10 @@ def main():
     rows = []
     for s in sessions:
         a = s["analysis"]
-        tot["input"] += a["input_tokens"]; tot["cached"] += a["cached_tokens"]
-        tot["rebilled"] += a["rebilled_tokens"]; tot["breaks"] += a["breaks"]
+        tot["input"] += a["input_tokens"]
+        tot["cached"] += a["cached_tokens"]
+        tot["rebilled"] += a["rebilled_tokens"]
+        tot["breaks"] += a["breaks"]
         tot["requests"] += a["requests"]
         rows.append(s)
     rows.sort(key=lambda s: -s["analysis"]["rebilled_tokens"])
@@ -207,12 +234,16 @@ def main():
         a = s["analysis"]
         date = (s["started"] or "")[:10]
         cwd = (s["cwd"] or "").replace(str(Path.home()), "~")
-        print(f"{date:<12} {(s['model'] or '?'):<16} {a['requests']:>5} {a['breaks']:>6} "
-              f"{a['hit_rate']:>5.0%} {fmt_tokens(a['rebilled_tokens']):>9}  {cwd[-40:]}")
+        print(
+            f"{date:<12} {(s['model'] or '?'):<16} {a['requests']:>5} {a['breaks']:>6} "
+            f"{a['hit_rate']:>5.0%} {fmt_tokens(a['rebilled_tokens']):>9}  {cwd[-40:]}"
+        )
     if tot["input"]:
-        print(f"\n{len(rows)} sessions, {tot['requests']} requests, "
-              f"overall hit rate {tot['cached']/tot['input']:.0%}, "
-              f"{tot['breaks']} cache breaks, {fmt_tokens(tot['rebilled'])} tokens re-billed")
+        print(
+            f"\n{len(rows)} sessions, {tot['requests']} requests, "
+            f"overall hit rate {tot['cached'] / tot['input']:.0%}, "
+            f"{tot['breaks']} cache breaks, {fmt_tokens(tot['rebilled'])} tokens re-billed"
+        )
 
 
 if __name__ == "__main__":

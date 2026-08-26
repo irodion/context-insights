@@ -1,0 +1,3 @@
+# Dev tools, pinned. Single source of truth for .githooks/pre-push and CI.
+ruff==0.16.4
+mypy==2.3.1

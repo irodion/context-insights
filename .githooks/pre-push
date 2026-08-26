@@ -1,0 +1,27 @@
+#!/bin/sh
+# Lint + type-check before pushing. Enable once per clone:
+#   git config core.hooksPath .githooks
+# Bypass in a pinch: git push --no-verify
+set -eu
+
+ROOT=$(git rev-parse --show-toplevel)
+REQS="$ROOT/requirements-dev.txt"
+cd "$ROOT"
+
+if command -v uv >/dev/null 2>&1; then
+	# Ephemeral env from the pinned requirements; cached after the first run.
+	run() { uv run --quiet --no-project --with-requirements "$REQS" "$@"; }
+elif command -v ruff >/dev/null 2>&1 && command -v mypy >/dev/null 2>&1; then
+	run() { "$@"; }
+else
+	echo "pre-push: needs uv (https://docs.astral.sh/uv) or ruff+mypy on PATH" >&2
+	echo "pre-push: bypass with 'git push --no-verify'" >&2
+	exit 1
+fi
+
+echo "pre-push: ruff check"
+run ruff check .
+echo "pre-push: ruff format --check"
+run ruff format --check .
+echo "pre-push: mypy"
+run mypy
