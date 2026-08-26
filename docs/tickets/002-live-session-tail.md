@@ -97,6 +97,18 @@ scrolled to the right edge stay pinned there, so new Requests appear as they are
 billed. This also retires the old re-focus hack in the filter handler.
 
 **Testing.** Seams agreed up front: `find_live_session()` and
-`waterfall_payload()`. The loop, the http server and the browser polling stay
-untested wiring, verified once by hand (see Acceptance) rather than by a test
-that would mostly assert `time.sleep`.
+`waterfall_payload()`. The http server and the browser polling stay untested
+wiring, verified by hand (see Acceptance) rather than by a test that would mostly
+assert `time.sleep`.
+
+**A third seam, added after the loop shipped a bug.** Leaving the loop untested
+cost exactly what the switch bug above describes — no unit test could see it,
+because the defect was in what the loop carried *between* iterations. `WatchMode`
+now holds that state and `tick()` is the seam: one iteration in, the rows to
+render out, or None when nothing moved. `watch()` keeps only the parts worth
+leaving untested — the server, the printing, the sleep. The retention test drove
+the extraction red-first; the two contract tests around it (a quiet tick asks for
+no rewrite, the first tick always renders) were written after and pin behaviour
+that already worked. The first-tick guard is new: without it, watching an empty
+directory rendered nothing and left a previous `--web` run's corpus on screen,
+where a stale snapshot reads as live.
