@@ -1,0 +1,239 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Three variants of the Waterfall page, switchable via
+     ?variant= (A|B|C) or arrow keys. Data: waterfall_prototype_data.js
+     (top 25 sessions by re-billed tokens, generated from parse_codex.py). -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Waterfall — prototype</title>
+<script src="waterfall_prototype_data.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface: #fcfcfb; --page: #f9f9f7;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --border: rgba(11,11,11,.1);
+    --cached: #2a78d6; --cached-soft: #9ec5f4;
+    --fresh: #c3c2b7;
+    --rebill: #d03b3b;
+    --compact: #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19; --page: #0d0d0d;
+      --ink: #fff; --ink2: #c3c2b7;
+      --grid: #2c2c2a; --border: rgba(255,255,255,.1);
+      --cached: #3987e5; --cached-soft: #184f95;
+      --fresh: #52514e;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--page); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding-bottom: 70px; }
+  #app { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 17px; margin-bottom: 2px; }
+  .sub { color: var(--ink2); margin-bottom: 16px; }
+  .legend { display: flex; gap: 14px; margin: 10px 0 14px; color: var(--ink2); flex-wrap: wrap; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  /* variant A */
+  .layoutA { display: flex; gap: 14px; }
+  .sesslist { width: 250px; flex: none; max-height: 75vh; overflow-y: auto; }
+  .sessrow { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+  .sessrow:hover { background: var(--grid); }
+  .sessrow.sel { background: var(--cached-soft); }
+  .sessrow b { display: block; font-size: 12px; }
+  .sessrow small { color: var(--ink2); }
+  .chartA { flex: 1; min-width: 0; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 340px; border-bottom: 1px solid var(--grid); overflow-x: auto; padding-top: 10px; }
+  .bar { flex: 1 0 4px; max-width: 26px; display: flex; flex-direction: column-reverse; cursor: default; }
+  .seg { width: 100%; }
+  .seg.cached { background: var(--cached); border-radius: 3px 3px 0 0; }
+  .seg.fresh  { background: var(--fresh); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  .seg.rebill { background: var(--rebill); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  .seg.compact{ background: var(--compact); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  /* variant B */
+  .heatrow { display: flex; align-items: center; gap: 10px; padding: 5px 0; cursor: pointer; border-bottom: 1px solid var(--grid); }
+  .heatrow:hover .hname { color: var(--cached); }
+  .hname { width: 210px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hname small { color: var(--muted); }
+  .strip { flex: 1; display: flex; gap: 1px; height: 18px; }
+  .cell { flex: 1; max-width: 8px; border-radius: 1px; }
+  .hmeta { width: 110px; flex: none; text-align: right; color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .detail { padding: 10px 0 4px; }
+  /* variant C */
+  .tiles { display: flex; gap: 12px; margin-bottom: 14px; }
+  .tile { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .tile .v { font-size: 26px; font-weight: 650; }
+  .tile .l { color: var(--ink2); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td.num, th.num { text-align: right; }
+  .pill-crit { color: var(--rebill); font-weight: 600; }
+  .spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 16px; width: 120px; }
+  .spark i { flex: 1; border-radius: 1px 1px 0 0; }
+  /* tooltip + switcher */
+  #tip { position: fixed; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; box-shadow: 0 4px 14px rgba(0,0,0,.18); display: none; z-index: 10; font-variant-numeric: tabular-nums; }
+  #switcher { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; background: var(--ink); color: var(--page); border-radius: 99px; padding: 8px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.3); z-index: 20; }
+  #switcher button { background: none; border: 0; color: inherit; font-size: 15px; cursor: pointer; padding: 2px 6px; }
+  #switcher b { min-width: 190px; text-align: center; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="tip"></div>
+<div id="switcher">
+  <button id="prev">←</button><b id="vlabel"></b><button id="next">→</button>
+</div>
+<script>
+const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? Math.round(n/1000)+"k" : String(n);
+const KINDS = ["first","hit","break","compaction"];
+// request tuple: [input, cached, rebilled, kind, hh:mm]
+const IN=0, CA=1, RB=2, KI=3, TS=4;
+
+const tip = document.getElementById("tip");
+function showTip(e, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - 230) + "px";
+  tip.style.top = (e.clientY + 14) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function tipHtml(r, i) {
+  const kind = KINDS[r[KI]];
+  return `<b>request ${i}</b> · ${r[TS]} · ${kind === "break" ? '<span class="pill-crit">⚠ cache break</span>' : kind}<br>
+    input ${fmt(r[IN])} · cached ${fmt(r[CA])} (${r[IN] ? Math.round(100*r[CA]/r[IN]) : 0}%)` +
+    (r[RB] ? `<br><span class="pill-crit">re-billed ${fmt(r[RB])}</span>` : "");
+}
+function attachTips(container) {
+  container.addEventListener("mousemove", e => {
+    const t = e.target.closest("[data-tip]");
+    t ? showTip(e, t.dataset.tip) : hideTip();
+  });
+  container.addEventListener("mouseleave", hideTip);
+}
+const LEGEND = `<div class="legend">
+  <span style="--c:var(--cached)">cached input</span>
+  <span style="--c:var(--fresh)">fresh input</span>
+  <span style="--c:var(--rebill)">⚠ re-billed (cache break)</span>
+  <span style="--c:var(--compact)">compaction</span></div>`;
+
+function barsHtml(s, height) {
+  const max = Math.max(...s.r.map(r => r[IN]));
+  return `<div class="bars" style="height:${height}px">` + s.r.map((r, i) => {
+    const h = v => Math.max(v ? 2 : 0, Math.round((height - 14) * v / max));
+    const cached = r[CA], rebill = r[RB], fresh = Math.max(0, r[IN] - cached - rebill);
+    const cls = r[KI] === 3 ? "compact" : "fresh";
+    return `<div class="bar" data-tip='${tipHtml(r, i).replace(/'/g, "&#39;")}'>
+      <div class="seg cached" style="height:${h(cached)}px"></div>
+      <div class="seg ${cls}" style="height:${h(fresh)}px"></div>
+      ${rebill ? `<div class="seg rebill" style="height:${h(rebill)}px"></div>` : ""}
+    </div>`;
+  }).join("") + `</div>`;
+}
+function sessTitle(s) {
+  const a = s.a;
+  return `<b>${s.cwd}</b> <small style="color:var(--muted)">${s.date} · ${s.model} · ${a.requests} requests ·
+    hit ${Math.round(a.hit_rate*100)}% · <span class="pill-crit">${a.breaks} breaks, ${fmt(a.rebilled_tokens)} re-billed</span></small>`;
+}
+
+/* ---- Variant A — Spectrum: session picker + one deep waterfall ---- */
+function renderA(app, state) {
+  const sel = SESSIONS[state.sess] || SESSIONS[0];
+  app.innerHTML = `<h1>Waterfall — session spectrum</h1>
+  <div class="sub">One session at a time, every request as a stacked bar. Pick a session on the left; hot spikes are money.</div>
+  ${LEGEND}
+  <div class="layoutA">
+    <div class="sesslist card">` + SESSIONS.map((s, i) =>
+      `<div class="sessrow ${i === state.sess ? "sel" : ""}" data-i="${i}">
+        <b>${s.cwd}</b><small>${s.date} · ${fmt(s.a.rebilled_tokens)} re-billed · ${s.a.breaks} breaks</small></div>`).join("") + `
+    </div>
+    <div class="chartA card"><div style="margin-bottom:8px">${sessTitle(sel)}</div>${barsHtml(sel, 340)}
+      <div style="color:var(--muted);margin-top:6px">requests →  (y = input tokens, max ${fmt(Math.max(...sel.r.map(r => r[IN])))})</div>
+    </div>
+  </div>`;
+  app.querySelectorAll(".sessrow").forEach(el =>
+    el.onclick = () => { state.sess = +el.dataset.i; renderA(app, state); });
+  attachTips(app);
+}
+
+/* ---- Variant B — Corpus heatmap: all sessions as strips, click to expand ---- */
+function renderB(app, state) {
+  app.innerHTML = `<h1>Waterfall — corpus view</h1>
+  <div class="sub">Every session is a strip, every request a cell shaded by cache-hit rate. Red cells are breaks. Click a strip to unfold it.</div>
+  ${LEGEND}
+  <div class="card">` + SESSIONS.map((s, i) => {
+    const cells = s.r.map((r, j) => {
+      const hit = r[IN] ? r[CA] / r[IN] : 0;
+      const color = r[KI] === 2 ? "var(--rebill)" : r[KI] === 3 ? "var(--compact)"
+        : `color-mix(in oklab, var(--cached) ${Math.round(20 + hit * 80)}%, var(--surface))`;
+      return `<div class="cell" style="background:${color}" data-tip='${tipHtml(r, j).replace(/'/g, "&#39;")}'></div>`;
+    }).join("");
+    const open = state.open === i;
+    return `<div class="heatrow" data-i="${i}"><div class="hname"><b>${s.cwd}</b> <small>${s.date}</small></div>
+      <div class="strip">${cells}</div>
+      <div class="hmeta">${Math.round(s.a.hit_rate*100)}% · <span class="pill-crit">${fmt(s.a.rebilled_tokens)}</span></div></div>` +
+      (open ? `<div class="detail">${barsHtml(s, 200)}</div>` : "");
+  }).join("") + `</div>`;
+  app.querySelectorAll(".heatrow").forEach(el =>
+    el.onclick = () => { state.open = state.open === +el.dataset.i ? -1 : +el.dataset.i; renderB(app, state); });
+  attachTips(app);
+}
+
+/* ---- Variant C — Break ledger: stat tiles + ranked table of breaks ---- */
+function renderC(app) {
+  const breaks = [];
+  let tin = 0, tca = 0, trb = 0;
+  SESSIONS.forEach(s => {
+    tin += s.a.input_tokens; tca += s.a.cached_tokens; trb += s.a.rebilled_tokens;
+    s.r.forEach((r, i) => { if (r[KI] === 2) breaks.push({ s, i, r }); });
+  });
+  breaks.sort((a, b) => b.r[RB] - a.r[RB]);
+  app.innerHTML = `<h1>Waterfall — break ledger</h1>
+  <div class="sub">Cost-first: each cache break is a line item. The sparkline shows where in the session it happened.</div>
+  <div class="tiles">
+    <div class="tile"><div class="v pill-crit">${fmt(trb)}</div><div class="l">tokens re-billed (top 25 sessions)</div></div>
+    <div class="tile"><div class="v">${breaks.length}</div><div class="l">cache breaks</div></div>
+    <div class="tile"><div class="v">${Math.round(100*tca/tin)}%</div><div class="l">aggregate hit rate</div></div>
+  </div>
+  <div class="card"><table>
+    <tr><th>project</th><th>date</th><th class="num">req #</th><th class="num">input</th><th class="num">cached</th>
+        <th class="num">⚠ re-billed</th><th>position in session</th></tr>` +
+    breaks.slice(0, 40).map(({ s, i, r }) => {
+      const max = Math.max(...s.r.map(q => q[IN]));
+      const spark = s.r.map((q, j) =>
+        `<i style="height:${Math.max(2, 16*q[IN]/max)}px;background:${j === i ? "var(--rebill)" : "var(--fresh)"}"></i>`).join("");
+      return `<tr><td>${s.cwd}</td><td>${s.date}</td><td class="num">${i}</td>
+        <td class="num">${fmt(r[IN])}</td><td class="num">${fmt(r[CA])}</td>
+        <td class="num pill-crit">${fmt(r[RB])}</td><td><span class="spark">${spark}</span></td></tr>`;
+    }).join("") + `</table>
+    <div style="color:var(--muted);margin-top:8px">top 40 of ${breaks.length} breaks</div></div>`;
+}
+
+/* ---- switcher ---- */
+const VARIANTS = [["A", "Session spectrum", renderA], ["B", "Corpus heatmap", renderB], ["C", "Break ledger", renderC]];
+const state = { sess: 0, open: -1 };
+function current() {
+  const k = new URLSearchParams(location.search).get("variant") || "A";
+  return Math.max(0, VARIANTS.findIndex(v => v[0] === k));
+}
+function render() {
+  const [key, name, fn] = VARIANTS[current()];
+  document.getElementById("vlabel").textContent = `${key} — ${name}`;
+  fn(document.getElementById("app"), state);
+}
+function cycle(d) {
+  const next = VARIANTS[(current() + d + VARIANTS.length) % VARIANTS.length][0];
+  history.replaceState(null, "", "?variant=" + next);
+  render();
+}
+document.getElementById("prev").onclick = () => cycle(-1);
+document.getElementById("next").onclick = () => cycle(1);
+addEventListener("keydown", e => {
+  if (e.target.closest("input,textarea,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") cycle(-1);
+  if (e.key === "ArrowRight") cycle(1);
+});
+render();
+</script>
+</body>
+</html>
