@@ -159,11 +159,7 @@ class HistoryRewriteTest(unittest.TestCase):
         """A Turn opening cold after minutes of idle is the prefix ageing out, not
         re-serialization: the provider keeps a prefix for only 5-10 minutes."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self))
             .add(turn_start(at(440)))  # 7 minutes idle
             .add(token_count(at(445), input_=80_000, cached=9_600))
             .add(turn_end(at(450)))
@@ -178,11 +174,7 @@ class HistoryRewriteTest(unittest.TestCase):
         """Codex re-serializes history at a Turn boundary; the cache was still warm,
         so the prefix diverged rather than expired."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self))
             # 90s idle: well inside the cache TTL, yet most of the prefix is gone.
             .add(turn_start(at(110)))
             .add(token_count(at(115), input_=80_000, cached=13_000))
@@ -237,11 +229,7 @@ class TurnContextChangeTest(unittest.TestCase):
     def test_a_new_turn_id_alone_is_not_a_turn_context_change(self):
         """`turn_id` is fresh on every Turn by definition, so it can never be a cause."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self))
             .add(turn_start(at(110)))
             .add(token_count(at(115), input_=80_000, cached=13_000))
             .add(turn_end(at(120)))
@@ -260,11 +248,7 @@ class DuplicateTokenCountTest(unittest.TestCase):
 
     def test_usage_replayed_at_the_next_turn_does_not_invent_a_break(self):
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self))
             .add(turn_start(at(110)))
             # Byte-identical to the Request above: the last Turn's usage, re-broadcast.
             .add(token_count(at(112), input_=80_000, cached=60_000))
@@ -313,11 +297,7 @@ class CacheWarmupTest(unittest.TestCase):
         """The cold Request's cache write has not landed yet, so the next Request
         misses too. Blaming the idle gap twice would double-count one root cause."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self))
             .add(turn_start(at(6000)))
             .add(token_count(at(6010), input_=81_000, cached=5_500))
             .add(token_count(at(6020), input_=87_000, cached=13_000))
