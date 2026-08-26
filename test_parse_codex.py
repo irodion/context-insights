@@ -26,8 +26,11 @@ def event(ts: str, type_: str, payload: dict) -> dict:
     return {"timestamp": ts, "type": type_, "payload": payload}
 
 
-def token_count(ts: str, input_: int, cached: int, output: int = 100) -> dict:
-    """An `event_msg`/`token_count` event: one Request."""
+def token_count(
+    ts: str, input_: int, cached: int, output: int = 100, total: int | None = None
+) -> dict:
+    """An `event_msg`/`token_count` event: one Request. `total` is the Session's
+    cumulative input, which only advances when an API call actually happened."""
     return event(
         ts,
         "event_msg",
@@ -41,7 +44,7 @@ def token_count(ts: str, input_: int, cached: int, output: int = 100) -> dict:
                     "output_tokens": output,
                     "reasoning_output_tokens": 0,
                 },
-                "total_token_usage": {"input_tokens": input_},
+                "total_token_usage": {"input_tokens": input_ if total is None else total},
                 "model_context_window": 272_000,
             },
         },
@@ -218,6 +221,22 @@ class DuplicateTokenCountTest(unittest.TestCase):
         diagnoses = parse_codex.explain_breaks(fixture.analyzed())
 
         self.assertEqual([d["index"] for d in diagnoses], [2])
+
+    def test_a_repeat_that_advanced_the_cumulative_total_is_a_real_request(self):
+        """Matching per-request counts alone do not prove a replay: two genuine calls
+        can bill the same tokens. The Session's cumulative total is what settles it —
+        it only moves when an API call actually happened."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=60_000, cached=40_000, total=60_000))
+            .add(token_count(at(20), input_=60_000, cached=40_000, total=120_000))
+            .add(turn_end(at(25)))
+        )
+
+        session = fixture.analyzed()
+
+        self.assertEqual(session["analysis"]["requests"], 2)
 
     def test_usage_emitted_twice_within_a_turn_does_not_invent_a_break(self):
         fixture = (

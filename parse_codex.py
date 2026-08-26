@@ -85,7 +85,7 @@ def load_codex_session(path):
     model = None
     requests: list[dict[str, Any]] = []
     turn_contexts: list[dict[str, Any]] = []
-    prev_usage: dict[str, Any] | None = None
+    prev_usage: tuple[dict[str, Any], dict[str, Any]] | None = None
     turn = 0
     with open(path, errors="replace") as f:
         for line in f:
@@ -111,11 +111,14 @@ def load_codex_session(path):
                 if not last:
                     continue
                 # Codex re-emits a Request's usage without a new API call: twice within
-                # a Turn, and again when the next Turn opens. Identical usage down to the
-                # token is a replay, not a Request — counting it invents Cache Breaks.
-                if last == prev_usage:
+                # a Turn, and again when the next Turn opens. Counting those invents Cache
+                # Breaks. Matching per-request counts alone would not prove a replay —
+                # two genuine calls can bill identically — so require the Session's
+                # cumulative total to have stood still too, which only a replay does.
+                total = info.get("total_token_usage") or {}
+                if (last, total) == prev_usage:
                     continue
-                prev_usage = last
+                prev_usage = (last, total)
                 requests.append(
                     {
                         "ts": ev.get("timestamp"),
@@ -123,7 +126,7 @@ def load_codex_session(path):
                         "cached": last.get("cached_input_tokens", 0),
                         "cache_write": last.get("cache_write_input_tokens", 0),
                         "output": last.get("output_tokens", 0),
-                        "total_input": (info.get("total_token_usage") or {}).get("input_tokens", 0),
+                        "total_input": total.get("input_tokens", 0),
                         "context_window": info.get("model_context_window"),
                         "gap_s": gap_seconds(requests[-1]["ts"] if requests else None, ts),
                         "turn": turn,
