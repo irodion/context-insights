@@ -113,6 +113,19 @@ today's corpus: all 274 replays have the cumulative total unchanged and zero
 Requests would have been wrongly dropped, so the two rules agree request-for-request.
 It closes a latent hole rather than fixing a live symptom.
 
+**`TTL_GAP_S` is 300s, not 600s** (review of PR #2). The review flagged the
+turn-boundary-rewrite branch for claiming cold breaks, and the branch was indeed
+over-claiming: 12 of 18 cold Turn openings sat at a 5–10 min gap, under the old
+600s cut. Providers keep a prefix ~5–10 min, so above 5 min expiry is the better
+explanation and those 12 now read as TTL expiry (re-billed moves 7.2M → 8.4M).
+The review's proposed remedy — reclassify cold Turn openings as *unknown* — was
+not taken: at a 7 min cold gap "unknown" discards the best available explanation,
+and it would have made easycall req 16 unknown (gap 1m49s, surviving prefix ≈ the
+session's static header exactly), regressing this ticket's acceptance. A 109s gap
+cannot be expiry. Retention alone cannot separate "cache was cold" from "prefix
+diverged early" — the Idle Gap is what separates them, which is why the TTL branch
+tests both and runs first.
+
 **Idle threshold is derived, not hardcoded.** `idle_gap_advice()` walks a ladder
 of gaps and reports the shortest at which ≥50% of resumed Requests broke. On this
 corpus that is 10m, covering 10.8M of 19.3M re-billed tokens. The gap/break
