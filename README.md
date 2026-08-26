@@ -43,3 +43,10 @@ The hook uses [uv](https://docs.astral.sh/uv) if present (otherwise `ruff` and
 same checks on 3.13 and 3.14. Conventions for changes are in
 [CLAUDE.md](CLAUDE.md) (`AGENTS.md` is a symlink to it); the backlog is
 `docs/tickets/`.
+
+`main` is protected: no direct pushes, changes land through a pull request,
+and history stays linear (rebase merge only).
+
+## License
+
+[MIT](LICENSE) © 2026 Rodion Izotov

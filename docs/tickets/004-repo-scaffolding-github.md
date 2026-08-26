@@ -25,7 +25,16 @@ a GitHub repo on the user's account so the project survives the machine.
 ## Decisions
 
 - **Private by default** — user stated this is not an open-source product.
-  Flipping public later is a conscious decision (then add a license).
+  Flipping public later is a conscious decision.
+- **MIT licensed anyway** (2026-08-26, user's instruction) — the repo stays
+  private; the licence just settles the terms in advance if it is opened.
+- **`main` is protected** — pull request required (0 approvals, so a solo dev
+  is not deadlocked), linear history enforced, force-push and deletion blocked,
+  admins included. GitHub has no literal fast-forward-only merge button, so
+  "ff only" is implemented as: merge commits and squash disabled, rebase merge
+  the only method, plus the linear-history rule. No required status checks yet
+  — CI was mid-outage; add with
+  `gh api -X PATCH repos/irodion/context-insights/branches/main/protection/required_status_checks -f 'contexts[]=lint (3.13)' -f 'contexts[]=lint (3.14)'`.
 - **CI after all** — this ticket originally said "no CI, no pyproject".
   Reversed 2026-08-26 on the user's instruction: ruff + mypy on a pre-push hook
   and in Actions. `pyproject.toml` carries tool config only, no build backend,
