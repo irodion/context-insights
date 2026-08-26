@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -23,10 +24,59 @@ SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 BREAK_RATIO = 0.8  # cached < 80% of expected cache => cache break
 COMPACTION_RATIO = 0.6  # input < 60% of previous input => compaction, not break
 REPLAY_BURST_MS = 200  # subagent replay: consecutive events closer than this
+TTL_GAP_S = 600  # idle seconds after which the provider's prompt cache has expired
+COLD_RETENTION = 0.25  # cached < 25% of expected cache => the cache went cold, not diverged
+WARMUP_GAP_S = 60  # a cold Request's cache write can still be in flight this long after
+
+# Idle-gap advisor: the ladder of gaps it tests, and the break rate at which resuming
+# a Session stops paying off. The reported threshold is whichever rung the data picks.
+IDLE_ADVICE_LADDER_S = (120, 300, 600, 1200, 3600)
+IDLE_BREAK_RATE = 0.5
+IDLE_ADVICE_MIN_SAMPLES = 20
+
+# Cache Break causes, as reported by explain_breaks()
+CAUSE_TURN_CONTEXT = "turn_context change"
+CAUSE_TTL_EXPIRY = "TTL expiry"
+CAUSE_CACHE_WARMUP = "cache warm-up"
+CAUSE_HISTORY_REWRITE = "turn-boundary history rewrite"
+CAUSE_HISTORY_CHANGE = "mid-turn history change"
+CAUSE_UNKNOWN = "unknown"
+
+# turn_context fields that change every Turn by design, so can never explain a break
+TURN_CONTEXT_VOLATILE = {"turn_id"}
+FINGERPRINT_SCALAR_LEN = 40  # longer values are digested rather than shown verbatim
 
 
 def parse_ts(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def gap_seconds(earlier, later):
+    """Seconds between two log timestamps; 0.0 when either is missing or unparseable."""
+    if not earlier or not later:
+        return 0.0
+    try:
+        return (parse_ts(later) - parse_ts(earlier)).total_seconds()
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def turn_context_fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
+    """Comparable form of a `turn_context`: short scalars verbatim, anything larger
+    (developer instructions, sandbox policy) digested so sessions stay cheap to keep
+    in memory and to dump. Volatile fields are dropped so they never look like a cause."""
+    fingerprint: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in TURN_CONTEXT_VOLATILE:
+            continue
+        if isinstance(value, str | int | float | bool | None.__class__) and (
+            len(str(value)) <= FINGERPRINT_SCALAR_LEN
+        ):
+            fingerprint[key] = value
+        else:
+            blob = json.dumps(value, sort_keys=True, default=str).encode()
+            fingerprint[key] = "#" + hashlib.sha1(blob).hexdigest()[:8]
+    return fingerprint
 
 
 def load_codex_session(path):
@@ -34,6 +84,9 @@ def load_codex_session(path):
     meta: dict[str, Any] = {}
     model = None
     requests: list[dict[str, Any]] = []
+    turn_contexts: list[dict[str, Any]] = []
+    prev_usage: dict[str, Any] | None = None
+    turn = 0
     with open(path, errors="replace") as f:
         for line in f:
             try:
@@ -41,16 +94,28 @@ def load_codex_session(path):
             except json.JSONDecodeError:
                 continue
             t = ev.get("type")
+            ts = ev.get("timestamp")
             payload = ev.get("payload") or {}
             if t == "session_meta" and not meta:
                 meta = payload
             elif t == "turn_context":
                 model = payload.get("model") or model
+                fingerprint = turn_context_fingerprint(payload)
+                if not turn_contexts or turn_contexts[-1] != fingerprint:
+                    turn_contexts.append(fingerprint)
+            elif t == "event_msg" and payload.get("type") == "task_started":
+                turn += 1
             elif t == "event_msg" and payload.get("type") == "token_count":
                 info = payload.get("info") or {}
                 last = info.get("last_token_usage")
                 if not last:
                     continue
+                # Codex re-emits a Request's usage without a new API call: twice within
+                # a Turn, and again when the next Turn opens. Identical usage down to the
+                # token is a replay, not a Request — counting it invents Cache Breaks.
+                if last == prev_usage:
+                    continue
+                prev_usage = last
                 requests.append(
                     {
                         "ts": ev.get("timestamp"),
@@ -60,6 +125,10 @@ def load_codex_session(path):
                         "output": last.get("output_tokens", 0),
                         "total_input": (info.get("total_token_usage") or {}).get("input_tokens", 0),
                         "context_window": info.get("model_context_window"),
+                        "gap_s": gap_seconds(requests[-1]["ts"] if requests else None, ts),
+                        "turn": turn,
+                        "first_in_turn": not requests or requests[-1]["turn"] != turn,
+                        "ctx": len(turn_contexts) - 1,
                     }
                 )
     if not meta and not requests:
@@ -72,6 +141,7 @@ def load_codex_session(path):
         "cwd": meta.get("cwd"),
         "started": meta.get("timestamp"),
         "model": model,
+        "turn_contexts": turn_contexts,
         "requests": requests,
     }
 
@@ -137,6 +207,133 @@ def analyze(session):
     return session
 
 
+def ran_cold(request: dict[str, Any] | None) -> bool:
+    """True when this Request was itself a Cache Break that kept almost nothing —
+    the cache was empty for it, rather than merely diverging part-way through."""
+    if request is None or request.get("kind") != "break":
+        return False
+    expected = request["expected_cache"]
+    return bool(expected) and request["cached"] / expected < COLD_RETENTION
+
+
+def turn_context_changes(
+    session: dict[str, Any], previous: dict[str, Any] | None, request: dict[str, Any]
+) -> list[tuple[str, Any, Any]]:
+    """Fields whose value differs between the turn_context of `previous` and of
+    `request`. Empty when nothing changed, or when either context is unknown."""
+    contexts = session.get("turn_contexts") or []
+    if previous is None:
+        return []
+    before_idx, after_idx = previous.get("ctx", -1), request.get("ctx", -1)
+    if before_idx == after_idx or not (0 <= before_idx < len(contexts)):
+        return []
+    if not 0 <= after_idx < len(contexts):
+        return []
+    before, after = contexts[before_idx], contexts[after_idx]
+    return [
+        (key, before.get(key), after.get(key))
+        for key in sorted(set(before) | set(after))
+        if before.get(key) != after.get(key)
+    ]
+
+
+def explain_breaks(session, ttl_gap_s=TTL_GAP_S):
+    """Diagnose every Cache Break in an analyzed session.
+
+    Returns one dict per break: index, cause, gap_s, retention, rebilled, detail.
+    """
+    diagnoses = []
+    reqs = session["requests"]
+    for i, r in enumerate(reqs):
+        if r["kind"] != "break":
+            continue
+        expected = r["expected_cache"]
+        retention = r["cached"] / expected if expected else 0.0
+        gap = r.get("gap_s", 0.0)
+        ctx_changes = turn_context_changes(session, reqs[i - 1] if i else None, r)
+        if ctx_changes:
+            cause = CAUSE_TURN_CONTEXT
+            detail = "changed between Turns: " + ", ".join(
+                f"{key} {before} -> {after}" for key, before, after in ctx_changes
+            )
+        elif gap >= ttl_gap_s and retention < COLD_RETENTION:
+            cause = CAUSE_TTL_EXPIRY
+            detail = (
+                f"{fmt_duration(gap)} idle before this Request; the cached prefix "
+                f"had expired, so the whole prompt was re-billed"
+            )
+        elif gap <= WARMUP_GAP_S and ran_cold(reqs[i - 1] if i else None):
+            cause = CAUSE_CACHE_WARMUP
+            detail = (
+                f"{fmt_duration(gap)} after a cold Request, whose cache write "
+                f"had not landed yet; the same idle gap is billed twice"
+            )
+        elif r.get("first_in_turn"):
+            cause = CAUSE_HISTORY_REWRITE
+            detail = (
+                f"first Request of a new Turn after only {fmt_duration(gap)} idle; "
+                f"history was re-serialized and {1 - retention:.0%} of the prefix diverged"
+            )
+        elif retention >= COLD_RETENTION:
+            cause = CAUSE_HISTORY_CHANGE
+            detail = (
+                f"the cache was still warm ({retention:.0%} of the prefix survived) but "
+                f"the prompt diverged part-way through, mid-Turn"
+            )
+        else:
+            cause = CAUSE_UNKNOWN
+            detail = (
+                f"cold cache with no idle gap and no turn_context change; "
+                f"kept {retention:.0%} of the expected prefix"
+            )
+        diagnoses.append(
+            {
+                "index": i,
+                "cause": cause,
+                "gap_s": gap,
+                "retention": retention,
+                "rebilled": r["rebilled"],
+                "detail": detail,
+            }
+        )
+    return diagnoses
+
+
+def idle_gap_advice(sessions):
+    """Correlate idle gap with Cache Break rate across sessions and derive the gap
+    beyond which resuming a Session stops being worth it. The threshold comes from
+    the observed data, not from a constant: it is the shortest gap on the ladder at
+    which at least IDLE_BREAK_RATE of resumed Requests broke the cache."""
+    graded = [
+        (r.get("gap_s", 0.0), r["kind"] == "break", r["rebilled"])
+        for s in sessions
+        for r in s["requests"]
+        if r["kind"] in ("break", "hit")
+    ]
+    for threshold in IDLE_ADVICE_LADDER_S:
+        beyond = [g for g in graded if g[0] >= threshold]
+        if len(beyond) < IDLE_ADVICE_MIN_SAMPLES:
+            continue
+        breaks = [g for g in beyond if g[1]]
+        if len(breaks) / len(beyond) >= IDLE_BREAK_RATE:
+            return {
+                "threshold_s": threshold,
+                "requests": len(beyond),
+                "breaks": len(breaks),
+                "break_rate": len(breaks) / len(beyond),
+                "rebilled": sum(g[2] for g in breaks),
+            }
+    return None
+
+
+def fmt_duration(seconds):
+    if seconds >= 3600:
+        return f"{seconds / 3600:.1f}h"
+    if seconds >= 60:
+        return f"{seconds / 60:.0f}m"
+    return f"{seconds:.0f}s"
+
+
 def fmt_tokens(n):
     return (
         f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1000:.0f}k" if n >= 1000 else str(n)
@@ -148,12 +345,43 @@ def main():
     ap.add_argument("--dir", default=str(SESSIONS_DIR))
     ap.add_argument("--all", action="store_true", help="include subagent/other sessions")
     ap.add_argument("--session", help="analyze a single rollout file in detail")
+    ap.add_argument("--explain", help="diagnose what invalidated the cache in one rollout file")
+    ap.add_argument("--request", type=int, help="with --explain, limit to one request index")
     ap.add_argument("--json", help="write normalized+analyzed sessions to this file")
     ap.add_argument(
         "--web", action="store_true", help="write waterfall_data.js next to waterfall.html"
     )
     ap.add_argument("--min-requests", type=int, default=3)
     args = ap.parse_args()
+
+    if args.explain:
+        s = analyze(load_codex_session(Path(args.explain)))
+        a = s["analysis"]
+        diagnoses = explain_breaks(s)
+        if args.request is not None:
+            diagnoses = [d for d in diagnoses if d["index"] == args.request]
+        print(f"{s['session_id']}  {s['model'] or '?'}  {s['thread_source']}  {s['cwd']}")
+        print(
+            f"{a['breaks']} cache breaks over {a['requests']} requests, "
+            f"{fmt_tokens(a['rebilled_tokens'])} tokens re-billed"
+        )
+        if not diagnoses:
+            print("\nno cache breaks to explain")
+            return
+        for d in diagnoses:
+            print(
+                f"\n{d['index']:>4}  {d['cause']}  "
+                f"(rebilled {fmt_tokens(d['rebilled'])}, {fmt_duration(d['gap_s'])} since "
+                f"the previous request, {d['retention']:.0%} of the prefix kept)"
+            )
+            print(f"      {d['detail']}")
+        by_cause: dict[str, int] = {}
+        for d in diagnoses:
+            by_cause[d["cause"]] = by_cause.get(d["cause"], 0) + d["rebilled"]
+        print("\nre-billed by cause:")
+        for cause, cost in sorted(by_cause.items(), key=lambda kv: -kv[1]):
+            print(f"  {fmt_tokens(cost):>7}  {cause}")
+        return
 
     if args.session:
         s = analyze(load_codex_session(Path(args.session)))
@@ -243,6 +471,15 @@ def main():
             f"\n{len(rows)} sessions, {tot['requests']} requests, "
             f"overall hit rate {tot['cached'] / tot['input']:.0%}, "
             f"{tot['breaks']} cache breaks, {fmt_tokens(tot['rebilled'])} tokens re-billed"
+        )
+    advice = idle_gap_advice(sessions)
+    if advice:
+        print(
+            f"idle advisor: requests resumed after >{fmt_duration(advice['threshold_s'])} idle "
+            f"broke the cache {advice['break_rate']:.0%} of the time "
+            f"({advice['breaks']}/{advice['requests']}), costing "
+            f"{fmt_tokens(advice['rebilled'])} re-billed tokens — past that gap the cached "
+            f"prefix is usually already gone, so resuming re-pays for the whole context"
         )
 
 
