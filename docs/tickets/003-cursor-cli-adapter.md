@@ -42,8 +42,27 @@ can be built until we can look at its on-disk session/log format.
   live tail for Cursor.
 - Open: inspect store.db blobs on a machine with Cursor installed — if they
   hold serialized usage, a first-class local adapter is back on the table.
-  Decision point below still stands, now shaped as: local adapter vs CSV
-  fallback vs skip.
+
+## Decision (2026-08-26): hooks-based capture — preferred approach
+
+Cursor hooks (`~/.cursor/hooks.json`) solve the data problem: in interactive
+mode the `afterAgentResponse` payload carries **input_tokens, output_tokens,
+cache_read_tokens, cache_write_tokens**; `beforeSubmitPrompt` / `sessionStart`
+/ `stop` give turn boundaries. Plan:
+
+- Ship a hook script that appends one JSON line per response to
+  `~/.context-insights/cursor-sessions.jsonl` (our own rollout-equivalent).
+- `load_cursor_session` reads that file; analysis/waterfall unchanged.
+- Live tail (ticket 002) works for Cursor too — hooks fire in real time.
+
+Caveats:
+- Known bug: non-interactive CLI (`cursor-agent -p`) omits the token-carrying
+  hooks entirely (forum #169059). Interactive-only until Cursor fixes it.
+- No history before hook install; forensics stays gap-based (no prompt bytes).
+- Verify empirically: does afterAgentResponse fire per API request (loop
+  step) or per turn? Determines waterfall resolution.
+
+Fallbacks, in order: store.db blob inspection → cloud CSV export.
 
 ## Notes
 
