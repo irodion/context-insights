@@ -1,5 +1,7 @@
 # Context Insights
 
+[![ci](https://github.com/irodion/context-insights/actions/workflows/ci.yml/badge.svg)](https://github.com/irodion/context-insights/actions/workflows/ci.yml)
+
 Find out where your CLI coding agent burns tokens. It reads agent session logs,
 detects **cache breaks** — requests whose prompt prefix changed, so the provider
 re-billed context that had already been cached — and draws each session as a
