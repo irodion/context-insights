@@ -1,0 +1,136 @@
+<!doctype html>
+<!-- Waterfall — session spectrum view of Codex cache efficiency.
+     Data: waterfall_data.js, regenerate with `python3 parse_codex.py --web` -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Context Insights — Waterfall</title>
+<script src="waterfall_data.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface: #fcfcfb; --page: #f9f9f7;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --border: rgba(11,11,11,.1);
+    --cached: #2a78d6; --cached-soft: #9ec5f4;
+    --fresh: #c3c2b7;
+    --rebill: #d03b3b;
+    --compact: #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19; --page: #0d0d0d;
+      --ink: #fff; --ink2: #c3c2b7;
+      --grid: #2c2c2a; --border: rgba(255,255,255,.1);
+      --cached: #3987e5; --cached-soft: #184f95;
+      --fresh: #52514e;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--page); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { max-width: 1280px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 17px; margin-bottom: 2px; }
+  .sub { color: var(--ink2); margin-bottom: 12px; }
+  .legend { display: flex; gap: 14px; margin: 10px 0 14px; color: var(--ink2); flex-wrap: wrap; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .layout { display: flex; gap: 14px; }
+  .sesslist { width: 260px; flex: none; max-height: 82vh; overflow-y: auto; }
+  .sesslist input { width: 100%; margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--grid); border-radius: 6px; background: var(--page); color: var(--ink); font: inherit; }
+  .sessrow { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+  .sessrow:hover { background: var(--grid); }
+  .sessrow.sel { background: var(--cached-soft); }
+  .sessrow b { display: block; font-size: 12px; }
+  .sessrow small { color: var(--ink2); }
+  .chart { flex: 1; min-width: 0; }
+  .pill-crit { color: var(--rebill); font-weight: 600; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 380px; border-bottom: 1px solid var(--grid); overflow-x: auto; padding-top: 10px; }
+  .bar { flex: 1 0 4px; max-width: 26px; display: flex; flex-direction: column-reverse; cursor: default; }
+  .seg { width: 100%; }
+  .seg.cached { background: var(--cached); border-radius: 3px 3px 0 0; }
+  .seg.fresh  { background: var(--fresh); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  .seg.rebill { background: var(--rebill); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  .seg.compact{ background: var(--compact); border-radius: 3px 3px 0 0; margin-top: 2px; }
+  #tip { position: fixed; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; box-shadow: 0 4px 14px rgba(0,0,0,.18); display: none; z-index: 10; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="tip"></div>
+<script>
+const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? Math.round(n/1000)+"k" : String(n);
+const KINDS = ["first","hit","break","compaction"];
+// request tuple: [input, cached, rebilled, kind, hh:mm]
+const IN=0, CA=1, RB=2, KI=3, TS=4;
+
+const tip = document.getElementById("tip");
+function tipHtml(r, i) {
+  const kind = KINDS[r[KI]];
+  return `<b>request ${i}</b> · ${r[TS]} · ${kind === "break" ? '<span class="pill-crit">⚠ cache break</span>' : kind}<br>
+    input ${fmt(r[IN])} · cached ${fmt(r[CA])} (${r[IN] ? Math.round(100*r[CA]/r[IN]) : 0}%)` +
+    (r[RB] ? `<br><span class="pill-crit">re-billed ${fmt(r[RB])}</span>` : "");
+}
+
+const state = { sess: 0, filter: "" };
+function totals() {
+  let inp = 0, ca = 0, rb = 0, br = 0;
+  SESSIONS.forEach(s => { inp += s.a.input_tokens; ca += s.a.cached_tokens; rb += s.a.rebilled_tokens; br += s.a.breaks; });
+  return { inp, ca, rb, br };
+}
+function render() {
+  const app = document.getElementById("app");
+  const t = totals();
+  const visible = SESSIONS.map((s, i) => [s, i])
+    .filter(([s]) => !state.filter || (s.cwd + " " + s.date + " " + (s.model || "")).toLowerCase().includes(state.filter));
+  const sel = SESSIONS[state.sess];
+  const max = Math.max(...sel.r.map(r => r[IN]));
+  const h = v => Math.max(v ? 2 : 0, Math.round(366 * v / max));
+  app.innerHTML = `<h1>Context Insights — Waterfall</h1>
+  <div class="sub">${SESSIONS.length} Codex sessions · overall hit rate ${Math.round(100*t.ca/t.inp)}% ·
+    <span class="pill-crit">${t.br} cache breaks, ${fmt(t.rb)} tokens re-billed</span></div>
+  <div class="legend">
+    <span style="--c:var(--cached)">cached input</span>
+    <span style="--c:var(--fresh)">fresh input</span>
+    <span style="--c:var(--rebill)">⚠ re-billed (cache break)</span>
+    <span style="--c:var(--compact)">compaction</span></div>
+  <div class="layout">
+    <div class="sesslist card">
+      <input id="filter" type="search" placeholder="filter sessions…" value="${state.filter}">` +
+      visible.map(([s, i]) =>
+        `<div class="sessrow ${i === state.sess ? "sel" : ""}" data-i="${i}">
+          <b>${s.cwd}</b><small>${s.date} · ${fmt(s.a.rebilled_tokens)} re-billed · ${s.a.breaks} breaks</small></div>`).join("") + `
+    </div>
+    <div class="chart card">
+      <div style="margin-bottom:8px"><b>${sel.cwd}</b> <small style="color:var(--muted)">${sel.date} · ${sel.model || "?"} ·
+        ${sel.a.requests} requests · hit ${Math.round(sel.a.hit_rate*100)}% ·
+        <span class="pill-crit">${sel.a.breaks} breaks, ${fmt(sel.a.rebilled_tokens)} re-billed</span></small></div>
+      <div class="bars">` + sel.r.map((r, i) => {
+        const fresh = Math.max(0, r[IN] - r[CA] - r[RB]);
+        return `<div class="bar" data-i="${i}">
+          <div class="seg cached" style="height:${h(r[CA])}px"></div>
+          <div class="seg ${r[KI] === 3 ? "compact" : "fresh"}" style="height:${h(fresh)}px"></div>
+          ${r[RB] ? `<div class="seg rebill" style="height:${h(r[RB])}px"></div>` : ""}
+        </div>`;
+      }).join("") + `</div>
+      <div style="color:var(--muted);margin-top:6px">requests → (y = input tokens, max ${fmt(max)})</div>
+    </div>
+  </div>`;
+  app.querySelectorAll(".sessrow").forEach(el =>
+    el.onclick = () => { state.sess = +el.dataset.i; render(); });
+  const filter = document.getElementById("filter");
+  filter.oninput = () => { state.filter = filter.value.toLowerCase(); render(); document.getElementById("filter").focus(); };
+  const bars = app.querySelector(".bars");
+  bars.addEventListener("mousemove", e => {
+    const b = e.target.closest(".bar");
+    if (!b) { tip.style.display = "none"; return; }
+    tip.innerHTML = tipHtml(sel.r[+b.dataset.i], +b.dataset.i);
+    tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 230) + "px";
+    tip.style.top = (e.clientY + 14) + "px";
+  });
+  bars.addEventListener("mouseleave", () => tip.style.display = "none");
+}
+render();
+</script>
+</body>
+</html>
