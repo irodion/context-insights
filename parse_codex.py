@@ -347,6 +347,13 @@ def idle_gap_advice(sessions):
 KIND_CODE = {"first": 0, "hit": 1, "break": 2, "compaction": 3}
 
 
+def session_key(session: dict[str, Any]) -> str:
+    """Stable identity for a Session across rewrites: the viewer holds its selection
+    by this rather than by row number, and Watch Mode uses it to recognize a Session
+    it has already seen."""
+    return session["session_id"] or session["file"]
+
+
 def waterfall_payload(
     sessions: list[dict[str, Any]], live: Path | None = None
 ) -> list[dict[str, Any]]:
@@ -359,7 +366,7 @@ def waterfall_payload(
     )
     return [
         {
-            "id": s["session_id"] or s["file"],
+            "id": session_key(s),
             "date": (s["started"] or "")[:10],
             "model": s["model"],
             "cwd": ((s["cwd"] or "").rstrip("/").split("/")[-1]) or s["cwd"],
@@ -453,20 +460,20 @@ def serve_waterfall(directory: Path, port: int) -> tuple[http.server.HTTPServer,
 def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -> None:
     """Follow the Live Session and rebuild the Waterfall while you work.
 
-    The rest of the corpus is parsed once, at startup, and its rows never change
-    after that; each tick re-reads only the Live Session, so a tick costs one file
-    read and builds one row.
+    The corpus is parsed once, at startup; each tick re-reads only the Live Session,
+    so a tick costs one file read. Sessions are held by id, latest state wins: a
+    Session keeps everything it accrued while live once Watch Mode moves on to a
+    newer one — including a Session that was too short to make the startup cut.
     """
-    baseline = load_sessions(sessions_dir, min_requests, include_all)
-    baseline_rows = waterfall_payload(baseline)
-    print(f"parsed {len(baseline)} sessions from {sessions_dir}", file=sys.stderr)
+    seen = {session_key(s): s for s in load_sessions(sessions_dir, min_requests, include_all)}
+    print(f"parsed {len(seen)} sessions from {sessions_dir}", file=sys.stderr)
 
     httpd, url = serve_waterfall(Path(__file__).parent, port)
     print(url, flush=True)
     print("watching for cache breaks — Ctrl-C to stop", file=sys.stderr, flush=True)
 
     followed: Path | None = None
-    previous: dict[str, Any] | None = None
+    previous: tuple[str, dict[str, Any]] | None = None
     try:
         while True:
             live = find_live_session(sessions_dir)
@@ -475,13 +482,14 @@ def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -
                 print(f"following {name}", file=sys.stderr, flush=True)
                 followed = live
             session = analyze(load_codex_session(live)) if live else None
-            row = waterfall_payload([session], live=live)[0] if session else None
-            if row != previous:
-                stale = row["id"] if row else None
-                write_waterfall_data(
-                    ([row] if row else []) + [r for r in baseline_rows if r["id"] != stale]
-                )
-                previous = row
+            # Only the Live Session can have moved, so its totals are the whole
+            # change signal; the payload is rebuilt only when they actually move.
+            current = (str(live), session["analysis"]) if session else None
+            if current != previous:
+                previous = current
+                if session:
+                    seen[session_key(session)] = session
+                write_waterfall_data(waterfall_payload(list(seen.values()), live=live))
             time.sleep(WATCH_INTERVAL_S)
     except KeyboardInterrupt:
         print("\nstopped", file=sys.stderr)
