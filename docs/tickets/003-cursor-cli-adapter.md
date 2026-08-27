@@ -1,6 +1,9 @@
 # 003 — Cursor CLI Agent adapter (second Agent Source)
 
-**Status:** blocked — Cursor CLI not installed on this machine, no sample logs
+**Status:** blocked on setup, not on research — the approach is decided
+(hooks-based capture, see Decision 2026-08-26). Needs Cursor CLI installed to
+ship the hook script and to settle whether `afterAgentResponse` fires per
+Request or per Turn.
 **Priority:** 3
 
 ## Context
