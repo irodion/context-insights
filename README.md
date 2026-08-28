@@ -40,8 +40,8 @@ pinned to the top of the list and badged. Ctrl-C stops it.
 `--explain` says *why* each break happened, and what it cost:
 
 ```
-  16  turn-boundary history rewrite  (rebilled 68k, 2m since the previous request, 10% of the recoverable prefix kept)
-      first Request of a new Turn after only 2m idle; history was re-serialized and 90% of the recoverable prefix diverged
+  16  turn-boundary history rewrite  (rebilled 68k, 2m since the previous request, 5% of the recoverable prefix kept)
+      first Request of a new Turn after only 2m idle; history was re-serialized and 95% of the recoverable prefix diverged
 
   17  TTL expiry  (rebilled 75k, 1.7h since the previous request, 0% of the recoverable prefix kept)
       1.7h idle before this Request; the cached prefix had expired, so the whole prompt was re-billed

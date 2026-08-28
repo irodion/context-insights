@@ -89,7 +89,7 @@ Nothing in the log accounts for those; the fallback says so instead of guessing.
 
 **The 82% / 18% split between the two was measured against zero and has since
 inverted.** Ticket `013` re-measured Retention above the Prefix Floor: mid-Turn
-breaks now read 21% *mid-turn history change*, 68% *unknown*, 11% *cache warm-up*
+breaks now read 18% *mid-turn history change*, 69% *unknown*, 12% *cache warm-up*
 over 241 mid-Turn breaks. The reasoning above stands for the 51 that remain — what
 changed is how many qualify, not why they qualify. `015` accounts for part of the
 new *unknown* mass: 0 of 19 tool-set changes are identified today.
@@ -129,8 +129,10 @@ not taken: at a 7 min cold gap "unknown" discards the best available explanation
 and it would have made easycall req 16 unknown (gap 1m49s, surviving prefix ≈ the
 session's static header exactly), regressing this ticket's acceptance. That
 "surviving prefix ≈ the static header" pattern is named in `013`: it is the Prefix
-Floor, and Retention is now measured above it. Req 16 still reads *turn-boundary
-history rewrite*, at 10% of the recoverable prefix rather than 16% of the whole. A 109s gap
+Floor, and Retention is now measured above it. That Session's floor is 9,600, corroborated by its first
+Request and by req 26; the lone 5,504 at req 17 is *below* the head. Req 16 still
+reads *turn-boundary history rewrite*, at 5% of the recoverable prefix rather than
+16% of the whole. A 109s gap
 cannot be expiry. Retention alone cannot separate "cache was cold" from "prefix
 diverged early" — the Idle Gap is what separates them, which is why the TTL branch
 tests both and runs first.

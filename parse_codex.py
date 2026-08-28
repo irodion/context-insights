@@ -15,6 +15,7 @@ import collections
 import functools
 import hashlib
 import http.server
+import itertools
 import json
 import sys
 import threading
@@ -46,6 +47,11 @@ COLD_RETENTION = 0.25  # retention above the Prefix Floor below this => cold, no
 # distribution, which is bimodal — 284 of 478 Breaks retain exactly nothing above the floor,
 # and the density trough separating them from the 0.3-0.7 bulge spans 0.20-0.40.
 WARMUP_GAP_S = 60  # a cold Request's cache write can still be in flight this long after
+# Two cache rebuilds coming back this close to the same low value are agreeing on a
+# re-cached head; one Request alone is just the deepest Break. The tolerance is the one
+# ticket 013 measured the floor with (Claude Code matched its own first Request within
+# 10% on 88 of 120 Breaks), not a fresh constant.
+FLOOR_CORROBORATION = 0.10
 
 # Idle-gap advisor: the ladder of gaps it tests, and the break rate at which resuming
 # a Session stops paying off. The reported threshold is whichever rung the data picks.
@@ -188,30 +194,44 @@ def strip_replay(session):
 
 
 def prefix_floor(requests: list[dict[str, Any]]) -> int:
-    """The Session's Prefix Floor (see CONTEXT.md), as the smallest non-zero Cached
-    Input across its Requests.
+    """The Session's Prefix Floor (see CONTEXT.md): the smallest Cached Input that two
+    cache rebuilds agree on, or zero when nothing corroborates one.
 
-    A lower bound, which is the safe direction: under-stating the floor leaves some
-    Retention over-reported, while over-stating it invents coldness on a Break that
-    really did keep conversation. The Session's *first* Cached Input reads as the more
-    literal cold-start prefix, but it is only that when the Session began cold — on
-    resumed Sessions it carries conversation too, and over the corpus it exceeds a
+    Only a Request that (re)built the prefix from the head is evidence about the head:
+    the first Request, every Cache Break, and every Compaction — a hit is the one kind
+    that continues an existing prefix. A hit's Cached Input is the head *plus* the
+    conversation, so admitting hits makes the rule pair values that are merely close:
+    over the corpus that lands 1.24x above the minimum at the median and above 1.5x on
+    45% of Sessions, against 1.00 and 8% here.
+
+    Corroboration is what makes the value a floor at all. The smallest Cached Input is
+    the re-cached head *if the cache ever came back head-only*; on a Session where it
+    never does, the smallest value is simply the deepest Cache Break, and subtracting
+    it would force that Break's own Retention to zero by construction. Taking the
+    smallest *corroborated* value rather than the smallest outright also survives a
+    Break that came back holding less than the head, which would otherwise take the
+    floor down with it. Uncorroborated, the floor is zero and Retention stays
+    unadjusted — the honest reading when no Request ever showed the head.
+
+    The minimum is preferred over the Session's *first* Cached Input, which reads as
+    the more literal cold-start prefix but is only that when the Session began cold —
+    on resumed Sessions it carries conversation too, and over the corpus it exceeds a
     later Break's Cached Input on 85 of 478 Breaks and its whole Expected Cache on 9.
-    Zero when nothing was ever cached, which restores the unadjusted ratio.
 
-    On a Session still being written, the floor is provisional: a later, colder Request
+    On a Session still being written, the floor is provisional: a later, colder rebuild
     can lower it, which lowers every Retention already reported for that Session.
     """
-    cached = [r["cached"] for r in requests if r["cached"]]
-    return min(cached) if cached else 0
+    rebuilds = sorted(r["cached"] for r in requests if r["cached"] and r["kind"] != "hit")
+    for low, above in itertools.pairwise(rebuilds):
+        if above <= low * (1 + FLOOR_CORROBORATION):
+            return low
+    return 0
 
 
 def analyze(session):
     """Classify each request: first / hit / break / compaction. Adds per-request
     `kind`, `expected_cache`, `rebilled`, `retention` and session-level aggregates."""
     reqs = strip_replay(session)
-    # Only `cached`, which the adapter set, so the floor is known before the loop.
-    floor = prefix_floor(reqs)
     prev = None
     total_input = total_cached = rebilled = breaks = compactions = 0
     for r in reqs:
@@ -234,11 +254,14 @@ def analyze(session):
             else:
                 r["kind"] = "hit"
                 r["rebilled"] = 0
-        recoverable = r["expected_cache"] - floor
-        r["retention"] = max(0.0, (r["cached"] - floor) / recoverable) if recoverable > 0 else 0.0
         total_input += r["input"]
         total_cached += r["cached"]
         prev = r
+    # Needs `kind` from the loop above: only cache rebuilds are evidence about the head.
+    floor = prefix_floor(reqs)
+    for r in reqs:
+        recoverable = r["expected_cache"] - floor
+        r["retention"] = max(0.0, (r["cached"] - floor) / recoverable) if recoverable > 0 else 0.0
     session["analysis"] = {
         "requests": len(reqs),
         "prefix_floor": floor,
@@ -606,10 +629,15 @@ def main():
         if args.request is not None:
             diagnoses = [d for d in diagnoses if d["index"] == args.request]
         print(f"{s['session_id']}  {s['model'] or '?'}  {s['thread_source']}  {s['cwd']}")
+        floor_note = (
+            f"above a {fmt_tokens(a['prefix_floor'])} prefix floor"
+            if a["prefix_floor"]
+            else "against zero — no two cache rebuilds agreed on a prefix floor"
+        )
         print(
             f"{a['breaks']} cache breaks over {a['requests']} requests, "
             f"{fmt_tokens(a['rebilled_tokens'])} tokens re-billed; "
-            f"retention is measured above a {fmt_tokens(a['prefix_floor'])} prefix floor"
+            f"retention is measured {floor_note}"
         )
         if not diagnoses:
             print("\nno cache breaks to explain")

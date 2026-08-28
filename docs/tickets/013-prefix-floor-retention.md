@@ -99,17 +99,49 @@ the floor those Sessions actually settle on is 21,248. On those three the
 first-Request rule gives a floor larger than the number it is subtracted from, and
 only lands on 0% by being clamped.
 
-The minimum is a *lower bound* on the floor. It can under-state the floor, leaving
-some of today's inflation in place; it can never over-state it, so it can never
-invent coldness on a Break that really did keep conversation. That is the safe
-direction, and the same error preference `010` wrote down for its allow-list.
-The modal value is worst of the three: floor > cached on 98 Breaks, floor ≥
-Expected Cache on 34.
+The minimum under-states the floor rather than over-stating it *within the values
+the Session actually shows*, which is the same error preference `010` wrote down
+for its allow-list. The modal value is worst of the three: floor > cached on 98
+Breaks, floor ≥ Expected Cache on 34.
 
-The stated fallback Scope asked for: floor is 0 when the Session never cached
-anything, which restores exactly today's unadjusted ratio. **No Session in the
-corpus needs it** — all 400 cached something. Prefix Floor across the corpus:
-median 11,008 tokens, range 2,432–50,944.
+**Corrected: "can never over-state it" was false. The floor now needs corroboration,
+and only cache rebuilds may supply it.** The minimum Cached Input is the re-cached
+head only if the cache ever came back head-only. On a Session where it never does —
+`60k/0 → 80k/60k → 90k/40k` through the adapter — the smallest value is simply the
+deepest Cache Break, and subtracting it forces *that Break's own* Retention to zero
+by construction: 50% becomes 0%, and a partial Break behind it is then misread as
+*cache warm-up* because `ran_cold()` sees a fabricated cold Request. **36 Breaks in
+the corpus were defining their own floor alone.**
+
+Two conditions fix it, and both were needed:
+
+1. **Corroboration.** The floor is the smallest value a *second* rebuild lands
+   within `FLOOR_CORROBORATION` (10%) of; uncorroborated, it is zero and Retention
+   stays unadjusted. Taking the smallest *corroborated* value rather than the
+   smallest outright also matters: a Break can come back holding less than the head
+   and would otherwise take the floor down with it. The easycall Session in `001` is
+   exactly that shape — a lone 5,504 under a 9,600 head seen twice — and a
+   first-cut rule that only checked whether the *minimum* was corroborated zeroed
+   its floor entirely.
+2. **Only rebuilds are candidates.** A Hit's Cached Input is the head plus the
+   conversation. Admitting Hits makes the rule pair values that are merely close:
+   the floor then lands 1.24x above the minimum at the median and above 1.5x on
+   **45%** of Sessions, against 1.00 and 8% when only the first Request, Cache
+   Breaks and Compactions may corroborate. `010`'s own guard fixture caught this
+   before the corpus did — it paired 56k with 60k, two mid-conversation values.
+
+Compactions are candidates because a Compaction *is* a cache rebuild, deliberate
+rather than accidental. Excluding them costs 3 of the 20 `current_date`-only
+Breaks, each of which has a Compaction sitting on the head at 21,248–23,296.
+
+245 of 401 Sessions have no corroborated floor and report the un-floored ratio —
+the honest reading, since nothing in those logs shows a head-only return. The 10%
+tolerance is not a fresh constant: it is the one this ticket's Evidence measured
+the floor with.
+
+The fallback Scope asked to have stated: the floor is 0 whenever nothing
+corroborates one, which restores exactly today's unadjusted ratio. Prefix Floor
+across the 156 Sessions that have one: median 11,008 tokens, range 2,432–31,488.
 
 **`COLD_RETENTION` stays 0.25, re-read rather than inherited.** The adjusted
 distribution is sharply bimodal: 284 of 478 Breaks retain *exactly nothing* above
@@ -123,12 +155,12 @@ included — the same basis as `010`'s table):
 
 | Break Cause | breaks | re-billed | share | was |
 |---|---:|---:|---:|---:|
-| TTL expiry | 169 | 17.09M | 65.8% | 64.3% |
-| unknown | 163 | 4.15M | 16.0% | 8.1% |
-| turn-boundary history rewrite | 47 | 2.22M | 8.5% | 9.6% |
-| cache warm-up | 27 | 1.02M | 3.9% | 2.9% |
-| mid-turn history change | 51 | 0.88M | 3.4% | 11.8% |
-| turn_context change | 21 | 0.61M | 2.4% | 3.3% |
+| TTL expiry | 167 | 16.98M | 65.4% | 64.3% |
+| unknown | 167 | 4.18M | 16.1% | 8.1% |
+| turn-boundary history rewrite | 48 | 2.26M | 8.7% | 9.6% |
+| cache warm-up | 30 | 1.05M | 4.0% | 2.9% |
+| mid-turn history change | 44 | 0.82M | 3.1% | 11.8% |
+| turn_context change | 22 | 0.69M | 2.7% | 3.3% |
 
 **Acceptance met: all 20 `current_date`-only Breaks read *TTL expiry*.** The four
 in the table above land at 0% Retention (they retain the floor exactly, to the
@@ -144,22 +176,25 @@ floor. It does not detect that, and no setting satisfies it:
 |---|---:|---:|---:|---:|---:|---:|
 | mid-turn history change | 51 | 56 | 65 | 71 | 74 | 83 |
 
-The floor is why, not the threshold. **Of the 145 Breaks that left, 111 retain
-literally nothing above the floor** — no threshold above zero can call them warm,
-and since the floor is a lower bound, "nothing above it" means they kept no
-conversation at all. Those were mis-labelled *diverged part-way through* when they
-were cold, which is the defect this ticket names. The remaining 34 are the genuine
-judgment call: they kept a median of 6,848 tokens (max 23,040) above the floor,
-below the trough, and are now called cold. **What the criterion was actually
+(Swept before the corroboration requirement, which moves the 0.25 column to 44.
+The shape of the argument is unchanged: no threshold reaches 195.)
+
+The floor is why, not the threshold. **Of the 152 Breaks that left, 118 retain
+literally nothing above a corroborated floor** — no threshold above zero can call
+them warm, and two independent rebuilds agreed on where that floor is. Those were
+mis-labelled *diverged part-way through* when they were cold, which is the defect
+this ticket names. The remaining 34 are the genuine judgment call: they kept a
+median of 6,144 tokens (max 23,040) above the floor, below the trough, and are now
+called cold. **What the criterion was actually
 guarding is met** — no Break that kept real conversation is newly cold, and the
 `explain_breaks()` guards below pin that.
 
-**The cost is a large *unknown* bucket: 37 → 163 Breaks, 8.1% → 16.0% of
+**The cost is a large *unknown* bucket: 37 → 167 Breaks, 8.1% → 16.1% of
 Re-billed.** That is honest rather than good — the log genuinely does not account
 for them, and `CONTEXT.md` already says to prefer saying so over inventing a
 cause. `015` is where the mass goes next: it identifies 0 of 19 tool-set changes
 today, and those land in exactly this bucket. `001`'s 82% / 18% mid-Turn split
-inverts to 21% *mid-turn history change* / 68% *unknown* / 11% *cache warm-up*
+inverts to 18% *mid-turn history change* / 69% *unknown* / 12% *cache warm-up*
 over 241 mid-Turn breaks; `001` is corrected in place.
 
 **The lead from map ticket 09 was not used as a target.** The 70.8% → 74.6%

@@ -206,6 +206,57 @@ class PrefixFloorTest(unittest.TestCase):
         self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
         self.assertAlmostEqual(diagnoses[0]["retention"], 0.0, places=2)
 
+    def test_a_break_that_alone_sets_the_floor_does_not_zero_its_own_retention(self):
+        """The smallest Cached Input is only the static header if the cache actually
+        came back header-only. On a Session that never does, the lowest value is just
+        the deepest Break — and letting it set the floor forces its own Retention to
+        zero by construction. Uncorroborated, the floor is not used."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            # Nothing here ever returns header-only: 40k is one Break, not a floor.
+            .add(token_count(at(10), input_=60_000, cached=0))
+            .add(token_count(at(20), input_=80_000, cached=60_000))
+            .add(token_count(at(30), input_=90_000, cached=40_000))
+            .add(turn_end(at(35)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_HISTORY_CHANGE)
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
+
+    def test_one_Request_below_the_head_does_not_destroy_the_floor(self):
+        """A Break can come back holding *less* than the head. That lone low value has
+        no companion, but the head above it does — so the floor is the smallest
+        corroborated Cached Input, not the smallest one. (The easycall Session in 001
+        is this shape: a lone 5,504 under a 9,600 head seen twice.)"""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=30_000, cached=21_000))
+            .add(token_count(at(20), input_=55_000, cached=30_000))
+            .add(turn_end(at(25)))
+            # A deep expiry that came back under the head: alone down there.
+            .add(turn_start(at(3_600)))
+            .add(token_count(at(3_625), input_=60_000, cached=5_000))
+            .add(token_count(at(3_700), input_=65_000, cached=60_000))
+            .add(turn_end(at(3_705)))
+            # Back onto the head, corroborating the 21k first Request.
+            .add(turn_start(at(7_300)))
+            .add(token_count(at(7_325), input_=70_000, cached=21_000))
+            .add(turn_end(at(7_330)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(
+            [d["cause"] for d in diagnoses],
+            [parse_codex.CAUSE_TTL_EXPIRY, parse_codex.CAUSE_TTL_EXPIRY],
+        )
+        self.assertAlmostEqual(diagnoses[1]["retention"], 0.0, places=2)
+
     def test_a_warm_resume_does_not_set_the_floor_above_surviving_conversation(self):
         """The floor is the smallest non-zero Cached Input, not the first one. A Session
         resumed warm opens with conversation already cached, so reading the floor off its
@@ -222,18 +273,26 @@ class PrefixFloorTest(unittest.TestCase):
             .add(turn_start(at(3_600)))
             .add(token_count(at(3_625), input_=85_000, cached=21_000))
             .add(token_count(at(3_700), input_=95_000, cached=85_000))
-            # Mid-Turn: the floor plus half of the 74k recoverable prefix.
-            .add(token_count(at(3_760), input_=100_000, cached=58_000))
-            .add(turn_end(at(3_765)))
+            .add(turn_end(at(3_705)))
+            # A second resume lands on the same head, corroborating that floor.
+            .add(turn_start(at(7_300)))
+            .add(token_count(at(7_325), input_=100_000, cached=21_500))
+            # Mid-Turn: the floor plus half of the 79k recoverable prefix.
+            .add(token_count(at(7_425), input_=110_000, cached=60_500))
+            .add(turn_end(at(7_430)))
         )
 
         diagnoses = parse_codex.explain_breaks(fixture.analyzed())
 
         self.assertEqual(
             [d["cause"] for d in diagnoses],
-            [parse_codex.CAUSE_TTL_EXPIRY, parse_codex.CAUSE_HISTORY_CHANGE],
+            [
+                parse_codex.CAUSE_TTL_EXPIRY,
+                parse_codex.CAUSE_TTL_EXPIRY,
+                parse_codex.CAUSE_HISTORY_CHANGE,
+            ],
         )
-        self.assertAlmostEqual(diagnoses[1]["retention"], 0.5, places=2)
+        self.assertAlmostEqual(diagnoses[2]["retention"], 0.5, places=2)
 
 
 class HistoryRewriteTest(unittest.TestCase):
@@ -438,18 +497,24 @@ class MidTurnBreakTest(unittest.TestCase):
         fixture = (
             RolloutFixture(self)
             .add(turn_start(at(0)))
-            # The Session opens on the static header alone: 20k is the Prefix Floor.
-            .add(token_count(at(10), input_=60_000, cached=20_000))
-            .add(token_count(at(20), input_=80_000, cached=60_000))
+            # The Session opens on the static header alone: 20k.
+            .add(token_count(at(10), input_=30_000, cached=20_000))
+            .add(token_count(at(20), input_=80_000, cached=30_000))
             # 50k is the floor plus half of the 60k recoverable prefix.
             .add(token_count(at(30), input_=90_000, cached=50_000))
             .add(turn_end(at(35)))
+            # A resume comes back on that same head, corroborating it as the floor.
+            .add(turn_start(at(3_600)))
+            .add(token_count(at(3_625), input_=95_000, cached=20_000))
+            .add(turn_end(at(3_630)))
         )
 
         diagnoses = parse_codex.explain_breaks(fixture.analyzed())
 
-        self.assertEqual(len(diagnoses), 1)
-        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_HISTORY_CHANGE)
+        self.assertEqual(
+            [d["cause"] for d in diagnoses],
+            [parse_codex.CAUSE_HISTORY_CHANGE, parse_codex.CAUSE_TTL_EXPIRY],
+        )
         self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
 
     def test_a_cold_break_with_no_gap_and_no_context_change_stays_unknown(self):

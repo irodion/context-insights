@@ -17,11 +17,24 @@ Break Causes:
 | `cache_miss_reason.type` | Requests | our Break Cause |
 |---|---:|---|
 | `previous_message_not_found` | 126 | **TTL expiry** — 104 of 105 breaks at >1h |
-| `unavailable` | 53 | **cache warm-up** |
+| `unavailable` | 53 | **no reported reason** — keep the heuristic |
 | `tools_changed` | 19 | **turn_context change** — all at <2m |
 | `model_changed` | 10 | **turn_context change** |
 | `messages_changed` | 10 | **history rewrite / Compaction** |
 | `system_changed` | 3 | **turn_context change** |
+
+**The `unavailable` row was refuted, and the table is graded, not proposed.**
+`unavailable` was mapped to *cache warm-up* on plausibility alone; map ticket 09
+§2 measured it and it is not that. 45 of its 47 main-Session occurrences sit on
+Requests we call **hits**, at median Retention **1.0000**, and none carries
+`cache_missed_input_tokens`. It means *the reason is unavailable* — the absence of
+a diagnosis, not a diagnosis. Treating it as a cause would turn missing
+information into a reported *cache warm-up*, so these Requests keep whatever the
+heuristic says. Two more rows are weaker than "almost one-to-one" suggests:
+`messages_changed` genuinely spans Compaction and history rewrite (`COMPACTION_RATIO
+= 0.6` separates them cleanly), and only **2 of 29** `*_changed` Breaks reach our
+`turn_context change` today — nothing in a Claude Code transcript states the tool
+set, which is `015`'s subject.
 
 The four `*_changed` types also carry **`cache_missed_input_tokens`** —
 Re-billed Tokens, from the server. Validated against our arithmetic over 42
