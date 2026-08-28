@@ -28,7 +28,13 @@ adapters are worth building and what each one promises; it does not build them.
 
 <!-- one line per resolved ticket: gist + link -->
 
-_(none yet)_
+- [01 — Codex: can quota consumption be attributed to a Session?](issues/01-codex-quota-attribution.md)
+  — **No at Cache Break granularity, and only a coarse band at Session
+  granularity.** Zero of 478 Breaks can move the 1pp-quantized counter; the
+  largest Break in six months is 0.250pp. 43.7% of Sessions end on the
+  `used_percent` they started with, and not one clean-window Session supports a
+  ±10% claim. The logs are also not a closed ledger — usage rose off-log in 16
+  measured gaps. Codex cost/quota = **degraded**, Session-level only.
 
 ## Not yet specified
 
@@ -41,6 +47,15 @@ _(none yet)_
   pricing table earns its maintenance for them. Parked alongside `009`.
 - Whether any source other than Codex can support Watch Mode. Cursor's
   pull-from-cloud fallback could not; a hooks-based Cursor path might.
+- Whether a **common cost unit** exists across sources at all. 01 found Codex's
+  quota is model-weighted and unpublished (680k–1.53M input tokens per
+  percentage point across three models), so even within one source the unit is
+  not linear in tokens. Sharpens once 02 and 04 report what their sources
+  expose; may become an extra axis on the matrix rather than a ticket.
+- Whether off-log consumption and server accounting lag can be told apart. 01
+  measured 16 instances but one client's logs cannot distinguish them; settling
+  it needs a deliberate quiet-interval experiment. Contingent — only worth
+  charting if any quota reporting survives 07.
 
 ## Out of scope
 
@@ -49,3 +64,10 @@ _(none yet)_
 - **Rewriting `docs/tickets/009`.** Parked by decision at chart time: it resumes
   once the matrix can give it a cross-source answer instead of a Codex-only one.
 - **Any change to `parse_codex.py`.** This map produces a decision, not code.
+- **Rolling a Session and its subagents up as one attributable unit.** Surfaced
+  by [01](issues/01-codex-quota-attribution.md): subagent fan-out is the dominant
+  concurrency source for a single user (109 of 411 Sessions), and a Session-tree
+  rollup would lift clean `user` coverage from 82.0% to 87.7%. It touches
+  `Thread Source` and how Re-billed Tokens are aggregated — a build decision for
+  `docs/tickets`, not a question about source capability, so it sits past this
+  map's destination. Worth a repo ticket regardless of the quota verdict.
