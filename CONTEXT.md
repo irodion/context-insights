@@ -54,12 +54,13 @@ re-billed ranking.
 ## Break Cause
 
 **Break Cause** — what invalidated the prefix, attributed to each Cache Break from
-the surrounding log events. One of:
+the surrounding log events. One of the following, tested in the order listed: the
+first that fits wins, so a Break Cause is what best explains the break rather than
+the only thing that changed. `--explain` names the others alongside it.
 
 - **TTL expiry** — a long Idle Gap, and the cache came back cold. The prefix simply
   aged out provider-side. Tested before any context difference: a Session resumed
-  days later almost always shows a different `current_date` too, but the gap
-  already explains the whole break.
+  days later almost always shows a different `current_date` too.
 - **turn_context change** — one or more tracked `turn_context` fields differ from
   the previous Turn (model, effort, sandbox and instructions among them), so the
   prompt header changed and the whole prefix died — and TTL expiry did not already

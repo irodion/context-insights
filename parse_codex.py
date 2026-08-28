@@ -270,7 +270,8 @@ def explain_breaks(session):
         previous = reqs[i - 1] if i else None
         ctx_changes = turn_context_changes(session, previous, r)
         # A resume that also moved `current_date` or a sandbox setting is still a
-        # resume: an expired prefix explains the whole break, so TTL goes first.
+        # resume: the expired prefix is the better explanation, so TTL goes first.
+        # What else moved is named in the detail rather than lost.
         if gap >= TTL_GAP_S and retention < COLD_RETENTION:
             cause = CAUSE_TTL_EXPIRY
             detail = (
@@ -278,8 +279,6 @@ def explain_breaks(session):
                 f"had expired, so the whole prompt was re-billed"
             )
             if ctx_changes:
-                # Named, not blamed: the fields that moved with the resume are worth
-                # seeing, but the expired prefix is what re-billed the prompt.
                 moved = ", ".join(key for key, _, _ in ctx_changes)
                 detail += f" ({moved} also changed)"
         elif ctx_changes:
