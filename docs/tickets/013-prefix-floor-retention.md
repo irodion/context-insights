@@ -188,6 +188,11 @@ assertions are unchanged; the token counts now put real conversation above the
 floor. `010`'s guard docstring said "whose static header survived" in as many
 words, which is how they were caught.
 
+**`--explain` names the floor it measures against.** The Prefix Floor rescales
+every percentage in that output, so the header line reports it — otherwise a Break
+reading "0% of the recoverable prefix kept" cannot be checked without re-deriving
+the floor by hand, which is the reading this ticket's own evidence table rests on.
+
 **`README.md` is corrected; the `--explain` sample is real output, not
 illustrative.** Retention is now reported as a share "of the recoverable prefix"
 wherever it is printed. On easycall, req 16 moves 16% → 10% and req 17 — the TTL
