@@ -2,7 +2,7 @@
 
 Type: grilling
 Status: open
-Blocked by: 01, 02
+Blocked by: 01, 02, 09
 
 ## Question
 
@@ -28,6 +28,11 @@ seam, and which `docs/tickets/010` has just spent four commits refining — is a
 *reconstruction* of something one source states outright, and an inferior one:
 at compaction boundaries the naive Expected Cache over-counts by 6–14x while the
 server figure stays honest.
+
+[09](09-grade-the-heuristic.md) measures how often our heuristic already agrees
+with the server. Do not decide 1 or 2 below without that number: if agreement is
+near-total the server signal buys precision at compaction and little else, and if
+it is poor the rule has been hiding real errors.
 
 Decide three things.
 
