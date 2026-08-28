@@ -209,15 +209,18 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     never does, the smallest value is simply the deepest Cache Break, and subtracting
     it would force that Break's own Retention to zero by construction.
 
-    Only the *smallest* rebuild is eligible. Climbing to the next pair when the
-    smallest is uncorroborated looks like it recovers a floor from a Session whose
-    deepest Break came back under the head, but it cannot be told apart from two
-    partial Breaks that merely landed near each other well above the head — the same
-    data shape, opposite answers. Refusing to climb under-states the floor on the
-    first shape and never over-states it on the second, which is the safe direction:
-    an over-stated floor invents coldness on a Break that really did keep
-    conversation. Uncorroborated, the floor is zero and Retention stays unadjusted —
-    the honest reading when no Request ever showed the head.
+    Only the *smallest* rebuild is eligible, and a rebuild that returned nothing counts
+    as one — a cold start is the smallest rebuild a Session can have, and dropping it
+    would let two partial Breaks above it become the bottom and invent a floor over the
+    conversation they kept. Climbing to the next pair when the smallest is
+    uncorroborated looks like it recovers a floor from a Session whose deepest Break
+    came back under the head, but it cannot be told apart from two partial Breaks that
+    merely landed near each other well above the head — the same data shape, opposite
+    answers. Refusing to climb under-states the floor on the first shape and never
+    over-states it on the second, which is the safe direction: an over-stated floor
+    invents coldness on a Break that really did keep conversation. Uncorroborated, the
+    floor is zero and Retention stays unadjusted — the honest reading when no Request
+    ever showed the head.
 
     The minimum is preferred over the Session's *first* Cached Input, which reads as
     the more literal cold-start prefix but is only that when the Session began cold —
@@ -227,7 +230,7 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     On a Session still being written, the floor is provisional: a later, colder rebuild
     can lower it, which lowers every Retention already reported for that Session.
     """
-    rebuilds = sorted(r["cached"] for r in requests if r["cached"] and r["kind"] != "hit")
+    rebuilds = sorted(r["cached"] for r in requests if r["kind"] != "hit")
     if len(rebuilds) < 2 or rebuilds[1] > rebuilds[0] * (1 + FLOOR_CORROBORATION):
         return 0
     return rebuilds[0]
