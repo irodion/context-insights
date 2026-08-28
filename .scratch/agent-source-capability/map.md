@@ -23,6 +23,13 @@ adapters are worth building and what each one promises; it does not build them.
   while writing about agent transcripts. A grep for `plan_type` across Claude
   Code transcripts on 2026-08-28 returned only this repo's own session echoing
   Codex payloads. Exclude this repo's sessions when searching for field names.
+  Two instances measured since, both of which would have produced a wrong answer:
+  (a) across the *clean* Claude Code corpus, substring search finds `quota` on 186
+  lines and `rate_limit` on 111 — **all string content, zero structural keys**, so
+  match parsed JSON keys, never text; (b) VS Code ships
+  `extensions/copilot/dist/cli.js`, which is **Claude Code, not Copilot** — 137
+  references to `@anthropic-ai/claude-code`, zero to `@github/copilot`. A path
+  named for a vendor is not evidence of that vendor.
 
 ## Decisions so far
 
@@ -35,18 +42,31 @@ adapters are worth building and what each one promises; it does not build them.
   `used_percent` they started with, and not one clean-window Session supports a
   ±10% claim. The logs are also not a closed ledger — usage rose off-log in 16
   measured gaps. Codex cost/quota = **degraded**, Session-level only.
+- [02 — Claude Code: what cache and cost telemetry do transcripts carry?](issues/02-claude-code-telemetry.md)
+  — **Cache forensics FULL and better than Codex; cost/quota NOT VIABLE.** The
+  server reports the Break Cause directly (`diagnostics.cache_miss_reason`, six
+  types mapping almost 1:1 onto ours) and the Re-billed figure with it; TTL is
+  recorded, Compaction is labelled, subagents do not replay. Quota refuted
+  structurally across 563 files / 95,131 records. One trap: dedupe by
+  `requestId` or phantom breaks inflate 6.8x.
+- [05 — Copilot: is there any local session telemetry at all?](issues/05-copilot-telemetry.md)
+  — **Session log NOT VIABLE (schema-confirmed: per-request usage is ephemeral
+  by design); SQLite ledger plausibly viable but UNVERIFIED.** VS Code Copilot
+  Chat measures the cached split and ships 100% of it to Microsoft telemetry,
+  keeping none on disk. [08](issues/08-verify-copilot-ledger.md) closes the cell.
 
 ## Not yet specified
 
-- Whether Claude Code's **recorded** cache TTL should replace the `TTL_GAP_S`
-  heuristic where a source provides it, and what that does to Break Cause
-  attribution. Sharpens once 02 and 06 land.
 - Whether `docs/tickets/005` changes shape if Claude Code turns out to be the
   better *reference* source rather than the third adapter.
 - What a dollar figure means for a user actually on API billing, and whether a
   pricing table earns its maintenance for them. Parked alongside `009`.
-- Whether any source other than Codex can support Watch Mode. Cursor's
-  pull-from-cloud fallback could not; a hooks-based Cursor path might.
+- Whether any source other than Codex can support Watch Mode. **Claude Code:
+  yes** — append-only JSONL on a stable path, one file per Session, with
+  `isSidechain` marking subagents, so CONTEXT.md's Live Session rule ports
+  directly ([02](issues/02-claude-code-telemetry.md)). Cursor's pull-from-cloud
+  fallback could not; a hooks-based Cursor path might. Copilot unknown. Becomes a
+  matrix row rather than a ticket once 04 reports.
 - Whether a **common cost unit** exists across sources at all. 01 found Codex's
   quota is model-weighted and unpublished (680k–1.53M input tokens per
   percentage point across three models), so even within one source the unit is
@@ -71,3 +91,8 @@ adapters are worth building and what each one promises; it does not build them.
   `Thread Source` and how Re-billed Tokens are aggregated — a build decision for
   `docs/tickets`, not a question about source capability, so it sits past this
   map's destination. Worth a repo ticket regardless of the quota verdict.
+- **Claude Code's `requestId` dedupe rule as vocabulary.** Surfaced by
+  [02](issues/02-claude-code-telemetry.md): it is the analogue of Replayed
+  Request with a different mechanism and a different fix, and getting it wrong
+  inflates breaks 6.8x. It belongs in `CONTEXT.md` before the adapter is
+  written — but that is `docs/tickets/005`'s job, not this map's.
