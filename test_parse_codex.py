@@ -254,6 +254,32 @@ class PrefixFloorTest(unittest.TestCase):
         )
         self.assertAlmostEqual(diagnoses[0]["retention"], 0.625, places=2)
 
+    def test_a_cold_start_outranks_two_partial_breaks_above_it(self):
+        """A Session that opened with nothing cached has a rebuild at zero, and that is
+        the smallest one. Two partial Breaks higher up cannot corroborate it, so there
+        is no floor — the zero must not be dropped before the smallest rebuild is
+        chosen, or those two Breaks become the bottom and invent a floor above the
+        conversation they kept."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            # A genuinely cold start: the cache returned nothing at all.
+            .add(token_count(at(10), input_=60_000, cached=0))
+            .add(token_count(at(20), input_=80_000, cached=60_000))
+            # Two partial Breaks, 40k and 41k, both still holding conversation.
+            .add(token_count(at(30), input_=90_000, cached=40_000))
+            .add(token_count(at(40), input_=95_000, cached=41_000))
+            .add(turn_end(at(45)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(
+            [d["cause"] for d in diagnoses],
+            [parse_codex.CAUSE_HISTORY_CHANGE, parse_codex.CAUSE_HISTORY_CHANGE],
+        )
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
+
     def test_a_hit_is_not_evidence_of_where_the_head_is(self):
         """A Hit's Cached Input is the whole previous prompt, so it bounds the head from
         *above*: the head is at most that, never exactly it. Letting a low Hit

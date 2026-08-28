@@ -40,13 +40,18 @@ unadjusted.
 Corroboration is what makes the value a floor at all: the smallest Cached Input is
 the re-cached head only if the cache ever came back head-only, and on a Session
 where it never does it is just the deepest Cache Break — subtracting it would force
-that Break's own Retention to zero by construction. **Only the smallest rebuild is
-eligible.** A Cache Break can be a partial divergence that kept most of the
-conversation, so two Breaks landing near each other agree on nothing; looking past
+that Break's own Retention to zero by construction.
+
+**Only the smallest rebuild is eligible, and a rebuild that returned nothing is
+one.** A Cache Break can be a partial divergence that kept most of the
+conversation, so two Breaks landing near each other agree on nothing. Looking past
 an uncorroborated smallest value to the next pair cannot be told apart from a
-Session whose deepest Break came back under the head, and would invent a floor above
-surviving conversation. Under-stating the floor leaves Retention over-reported;
-over-stating it invents coldness. Under-stating is the safe direction.
+Session whose deepest Break came back under the head, and would invent a floor
+above surviving conversation. For the same reason a cold start — Cached Input of
+zero — stays in the running as the smallest rebuild a Session can have; discarding
+it would let two partial Breaks above it become the bottom. Under-stating the floor
+leaves Retention over-reported; over-stating it invents coldness. Under-stating is
+the safe direction.
 
 On a Session still being written the floor is provisional: a later, colder rebuild
 can lower it, and lower every Retention already reported for that Session.

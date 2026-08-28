@@ -89,7 +89,7 @@ Nothing in the log accounts for those; the fallback says so instead of guessing.
 
 **The 82% / 18% split between the two was measured against zero and has since
 inverted.** Ticket `013` re-measured Retention above the Prefix Floor: mid-Turn
-breaks now read 26% *mid-turn history change*, 63% *unknown*, 11% *cache warm-up*
+breaks now read 29% *mid-turn history change*, 60% *unknown*, 10% *cache warm-up*
 over 241 mid-Turn breaks. The reasoning above stands for the 51 that remain — what
 changed is how many qualify, not why they qualify. `015` accounts for part of the
 new *unknown* mass: 0 of 19 tool-set changes are identified today.
