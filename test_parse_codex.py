@@ -124,10 +124,11 @@ class RolloutFixture:
         return parse_codex.analyze(parse_codex.load_codex_session(self.write()))
 
 
-def a_turn(fixture: RolloutFixture) -> RolloutFixture:
-    """The smallest believable Turn: two clean Requests."""
+def a_turn(fixture: RolloutFixture, **context) -> RolloutFixture:
+    """The smallest believable Turn: two clean Requests. `context` overrides
+    turn_context fields, so a later Turn can be made to differ from this one."""
     return (
-        fixture.add(turn_start(at(0)))
+        fixture.add(turn_start(at(0), **context))
         .add(token_count(at(10), input_=60_000, cached=40_000))
         .add(token_count(at(20), input_=80_000, cached=60_000))
         .add(turn_end(at(25)))
@@ -158,17 +159,13 @@ class TTLExpiryTest(unittest.TestCase):
 
     def test_a_cold_resume_days_later_is_ttl_expiry_even_though_the_date_moved(self):
         """Picking a Session back up days later also moves `current_date`. The prefix
-        expired long before the date did, so the actionable cause is the idle gap:
-        TTL expiry is tested ahead of any turn_context difference."""
+        expired long before the date did, so the cause is the idle gap — with the
+        fields that moved alongside it named, not dropped."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0), current_date="2026-03-20"))
-            .add(token_count(at(10), input_=20_000, cached=9_600))
-            .add(token_count(at(20), input_=40_000, cached=20_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self), current_date="2026-03-20")
             # Two days idle, then the same Session is resumed.
             .add(turn_start(at(172_800), current_date="2026-03-22"))
-            .add(token_count(at(172_810), input_=41_000, cached=9_600))
+            .add(token_count(at(172_810), input_=90_000, cached=9_600))
             .add(turn_end(at(172_815)))
         )
 
@@ -176,6 +173,7 @@ class TTLExpiryTest(unittest.TestCase):
 
         self.assertEqual(len(diagnoses), 1)
         self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
+        self.assertIn("current_date", diagnoses[0]["detail"])
 
 
 class HistoryRewriteTest(unittest.TestCase):
@@ -255,13 +253,9 @@ class TurnContextChangeTest(unittest.TestCase):
         A Session resumed a day later whose static header survived kept 40% of the
         prefix, so the gap does not explain the break — the sandbox flip does."""
         fixture = (
-            RolloutFixture(self)
-            .add(turn_start(at(0), file_system_sandbox_policy="read-only"))
-            .add(token_count(at(10), input_=20_000, cached=9_600))
-            .add(token_count(at(20), input_=40_000, cached=20_000))
-            .add(turn_end(at(25)))
+            a_turn(RolloutFixture(self), file_system_sandbox_policy="read-only")
             .add(turn_start(at(86_400), file_system_sandbox_policy="workspace-write"))
-            .add(token_count(at(86_410), input_=41_000, cached=16_000))
+            .add(token_count(at(86_410), input_=90_000, cached=32_000))
             .add(turn_end(at(86_415)))
         )
 

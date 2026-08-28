@@ -269,15 +269,19 @@ def explain_breaks(session):
         gap = r.get("gap_s", 0.0)
         previous = reqs[i - 1] if i else None
         ctx_changes = turn_context_changes(session, previous, r)
-        # An expired prefix is tested first: a resume that also moved `current_date`
-        # or a sandbox setting is still a resume, and the Idle Gap already explains
-        # the whole break. Only a config change no gap accounts for is a cause.
+        # A resume that also moved `current_date` or a sandbox setting is still a
+        # resume: an expired prefix explains the whole break, so TTL goes first.
         if gap >= TTL_GAP_S and retention < COLD_RETENTION:
             cause = CAUSE_TTL_EXPIRY
             detail = (
                 f"{fmt_duration(gap)} idle before this Request; the cached prefix "
                 f"had expired, so the whole prompt was re-billed"
             )
+            if ctx_changes:
+                # Named, not blamed: the fields that moved with the resume are worth
+                # seeing, but the expired prefix is what re-billed the prompt.
+                moved = ", ".join(key for key, _, _ in ctx_changes)
+                detail += f" ({moved} also changed)"
         elif ctx_changes:
             cause = CAUSE_TURN_CONTEXT
             detail = "changed between Turns: " + ", ".join(
