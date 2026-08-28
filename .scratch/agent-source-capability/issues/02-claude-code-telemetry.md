@@ -77,8 +77,9 @@ key-name regex, then 57 explicit candidate names) across all 563 files. **Absent
 as a structural key anywhere:** `plan_type`, `subscription`, `quota`,
 `rate_limit`, `resets_at`, `usage_limit`, `credits`, `balance`, `tier`,
 `organization`, `billing`, `spend`, `overage`, `weeklyLimit`, `percentUsed`, and
-42 others. Three things exist and none is a quota signal: `service_tier` (always
-`"standard"` — an API tier, not a plan); `apiErrorStatus` 429 ×19 with a
+42 others. Three things exist and none is a quota signal: `service_tier` (`"standard"`
+on every record that carries a value and **`null` on 98**, which is an absent
+value rather than a second tier — an API tier either way, not a plan); `apiErrorStatus` 429 ×19 with a
 **plain-string** body (no `retry_after`, no reset, no remaining); and a
 `cost-state` record present in **1 of 563 files** (2.1.246 only) whose own numbers
 contradict the Session it summarises — it claims 27,792 cache-read against the

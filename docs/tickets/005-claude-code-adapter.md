@@ -57,7 +57,11 @@ not just a per-file one.
 ## Scope
 
 - `load_claude_session(path)` → the normalized session dict, `agent_source:
-  "claude-code"`. Dedupe by `requestId` as above.
+  "claude-code"`. Dedupe by `requestId` within the file. The cross-file dedupe
+  above cannot live inside a per-path loader: the caller that walks a corpus
+  keeps **one** `requestId` set across every file it loads and drops Requests
+  already seen in an earlier Session, so `--source all` counts the 82 shared ids
+  once. The normalized output and `agent_source` are unchanged either way.
 - **Turns** from `promptId` — present on 98.97% of `user` records and **0%** of
   assistant records; tool-result records carry the originating prompt's id.
   Attribution yields 17,004 Requests placed and 1 orphan. There is also an
@@ -70,7 +74,10 @@ not just a per-file one.
   carrying `compactMetadata` with `preTokens` / `postTokens` /
   `cumulativeDroppedTokens` / `trigger`. Classify as Compaction, never as a
   Cache Break.
-- `--source codex|claude-code|all`, shared with ticket 003's `cursor`.
+- `--source codex|claude-code|cursor|all` — one enum shared across adapters, so
+  ticket 003's `cursor` and this ticket's `claude-code` are values of the same
+  flag rather than two separate scopes. Whichever adapter lands first adds its
+  value; `all` means every adapter present.
 - Treat unknown `usage` keys as **additive**: 10 versions appeared in a ~4-month
   corpus, `output_tokens_details` arriving at 2.1.239. Never require an optional
   key.

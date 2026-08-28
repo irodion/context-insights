@@ -46,10 +46,17 @@ whereas a log-derived signal works everywhere.
 
 ## Acceptance
 
-- The 19 `tools_changed` Breaks in the Claude Code corpus are attributed to the
-  new cause rather than to *mid-turn history change* or *unknown*, and this is
-  verified **against the server field as ground truth without consuming it** —
-  the detector must not read `cache_miss_reason`, only be graded by it.
+- The **16** `tools_changed` Breaks that carry the deferred-tool marker are
+  attributed to the new cause rather than to *mid-turn history change* or
+  *unknown*, and this is verified **against the server field as ground truth
+  without consuming it** — the detector must not read `cache_miss_reason`, only
+  be graded by it.
+- The remaining **3** have no marker in the preceding record, so this mechanism
+  cannot reach them. Either find evidence that does and say what it is, or leave
+  them where they fall and record that they stay *unknown* — 16 of 19 is the
+  claim this ticket can support, and 19 of 19 is not. Do not widen the heuristic
+  to catch them on proximity alone; that would buy the last three by making the
+  first sixteen less certain.
 - The *unknown* bucket shrinks and nothing that was correctly attributed moves.
 - Re-run ticket 09's confusion matrix and record the new agreement rate.
 - Tests at the agreed seam.

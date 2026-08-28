@@ -457,13 +457,15 @@ class TurnContextChangeTest(unittest.TestCase):
 
     def test_a_config_change_survives_a_long_gap_when_the_prefix_did_not_expire(self):
         """TTL expiry is tested first, but it needs both a long gap and a cold cache.
-        A Session resumed a day later that kept 40% of the recoverable prefix — real
-        conversation, above the Prefix Floor — did not expire, so the gap does not
-        explain the break. The sandbox flip does."""
+        This Session gets no Prefix Floor — its first Request cached 40k and the Break
+        cached 56k, too far apart to corroborate — so Retention is the unadjusted
+        56k/80k, 70%. That is far too warm to have expired, so the gap does not explain
+        the break. The sandbox flip does."""
         fixture = (
             a_turn(RolloutFixture(self), file_system_sandbox_policy="read-only")
             .add(turn_start(at(86_400), file_system_sandbox_policy="workspace-write"))
-            # Floor is 40k; 56k is the floor plus 40% of the 40k recoverable prefix.
+            # 56k against an 80k Expected Cache: 70% survived, and no floor is
+            # corroborated, so nothing rescales it.
             .add(token_count(at(86_410), input_=90_000, cached=56_000))
             .add(turn_end(at(86_415)))
         )
