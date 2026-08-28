@@ -54,6 +54,13 @@ adapters are worth building and what each one promises; it does not build them.
   by design); SQLite ledger plausibly viable but UNVERIFIED.** VS Code Copilot
   Chat measures the cached split and ships 100% of it to Microsoft telemetry,
   keeping none on disk. [08](issues/08-verify-copilot-ledger.md) closes the cell.
+- [09 — Grade `explain_breaks()` against the first ground truth we have ever had](issues/09-grade-the-heuristic.md)
+  — **70.8% agreement by count, 81.6% by Re-billed Tokens: right about how much,
+  wrong about why.** TTL expiry 94.7% correct and carrying 85.1% of re-billed;
+  `mid-turn history change` 0/11 and `unknown` 0/12. Break *detection* has zero
+  false positives and `BREAK_RATIO` is vindicated. Ticket 010's reorder measured
+  **+5.4pp** against the order it replaced. Three shipped defects surfaced —
+  see Out of scope.
 
 ## Not yet specified
 
@@ -99,6 +106,20 @@ adapters are worth building and what each one promises; it does not build them.
   `Thread Source` and how Re-billed Tokens are aggregated — a build decision for
   `docs/tickets`, not a question about source capability, so it sits past this
   map's destination. Worth a repo ticket regardless of the quota verdict.
+- **Three defects in shipped behaviour, found by [09](issues/09-grade-the-heuristic.md).**
+  Each needs a ticket in `docs/tickets`; none is a question about source
+  capability, so all three sit past this map's destination.
+  1. **`COLD_RETENTION` is measured against zero, but a total expiry retains a
+     constant prefix block** (~21k in Claude Code; Codex's equivalent is the
+     "static header surviving" noted in `001`). 9 confirmed expiries were missed
+     for this reason, and it is very likely the same cause as the 4 residual
+     `current_date`-only breaks that `010`'s reorder could not reach.
+  2. **The Compaction branch hides real expiry cost.** 12 confirmed expiries are
+     booked at `rebilled = 0`, and where a figure exists `expected − cached`
+     over-counts by 5–14x while `input − cached` lands within 15%.
+  3. **A tool-set-change cause is reachable inside the agent-agnostic rule** —
+     16 of 19 `tools_changed` Breaks have a deferred-tool-load marker in the
+     preceding record.
 - **Claude Code's `requestId` dedupe rule as vocabulary.** Surfaced by
   [02](issues/02-claude-code-telemetry.md): it is the analogue of Replayed
   Request with a different mechanism and a different fix, and getting it wrong

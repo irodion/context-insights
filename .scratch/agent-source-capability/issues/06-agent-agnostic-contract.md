@@ -34,6 +34,20 @@ with the server. Do not decide 1 or 2 below without that number: if agreement is
 near-total the server signal buys precision at compaction and little else, and if
 it is poor the rule has been hiding real errors.
 
+Two constraints [09](09-grade-the-heuristic.md) added that any answer must respect:
+
+- **The server signal is main-session-only.** 80 of 82 subagent Breaks carry no
+  reason, and subagents are **38.7% of all Breaks**. A design leaning on it
+  degrades on more than a third of the corpus.
+- **There is a third option.** 16 of the 19 `tools_changed` Breaks are preceded
+  by a tool result carrying `total_deferred_tools` / `matches` / `query`. The
+  cause is **in the log**, just not in anything `explain_breaks()` reads —
+  reachable *without* breaking the agent-agnostic rule.
+
+And the measured answer to the question this ticket was going to turn on:
+**70.8% agreement by count, 81.6% by Re-billed Tokens.** The heuristic is right
+about how much and wrong about why, so this is not a single yes/no.
+
 Decide three things.
 
 1. **Does the rule survive as-is, become "agent-agnostic but capability-aware"
