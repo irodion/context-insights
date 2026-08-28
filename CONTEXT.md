@@ -29,7 +29,7 @@
 **Prefix Floor** — the head of the prompt that is re-sent identically on every
 Request and so re-caches immediately after any Cache Break: system header, tool
 definitions, instructions. It is not conversation, so it must not count as
-surviving conversation. Derived per Session as the smallest non-zero Cached Input
+surviving conversation. Derived per Session as the smallest Cached Input
 across the Requests that *rebuilt* the prefix — the first Request, every Cache
 Break and every Compaction; a Hit continues an existing prefix, and its Cached Input
 is the whole previous prompt, which bounds the head from above rather than locating

@@ -224,9 +224,10 @@ ordering is a vocabulary fact rather than an implementation detail a later
 refactor could quietly reverse. Ticket `001`'s claim that "the TTL branch tests both and runs first" needed
 no edit — the code now says what the doc always did.
 
-**No number moved in `README.md` or `001`.** README's `--explain` sample is
-illustrative and still accurate; 001's mid-Turn percentages rest on
-*mid-turn history change* and *unknown*, neither of which changed. `idle_gap_advice()`
+**No number moved in `README.md` or `001`** — by change 1. README's `--explain`
+sample is illustrative and still accurate; 001's mid-Turn percentages rest on
+*mid-turn history change* and *unknown*, neither of which changed. (`013` later
+moved both, when it re-measured Retention above the Prefix Floor; see above.) `idle_gap_advice()`
 does not go through `explain_breaks()`, so its ladder is untouched.
 
 **Tests at the `explain_breaks()` seam, one driving and one guarding.** The driving

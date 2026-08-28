@@ -80,8 +80,9 @@ The heuristic is **right about how much and wrong about why.**
 | mid-turn history change | 11 | 0 | **0.0%** |
 | unknown | 12 | 0 | **0.0%** |
 
-All 23 of the `mid-turn history change` / `unknown` cases were server-reported
-config changes (19 `tools_changed`, 2 `model_changed`, 2 expiry). **Our "unknown"
+All 23 of the `mid-turn history change` / `unknown` cases were server-reported:
+**21 config changes** (19 `tools_changed`, 2 `model_changed`) and 2 expiry
+reports. **Our "unknown"
 bucket is not noise — it is a real cause we cannot see.** Robust: rebuilding the
 fingerprint from any subset of {model, effort, cwd, gitBranch, permissionMode,
 version} gives 70.8% every time.
@@ -135,8 +136,10 @@ predicts ~35% of Codex cause labels would survive a server check.
   Tokens. The claim the tool exists to make — *long idle gaps are what cost you*
   — is validated by an independent source for the first time.
 - **Do not trust the fine-grained causes.** `mid-turn history change`, `unknown`
-  and `turn-boundary history rewrite` are 285 of 475 Codex Breaks and were wrong
-  on every graded case.
+  and `turn-boundary history rewrite` are 285 of 475 Codex Breaks. The first two
+  were wrong on **every** graded case (0 of 11 and 0 of 12); `turn-boundary
+  history rewrite` agreed **1 of 8**, which is not zero but is not a basis for
+  trusting it either.
 
 **Coverage limit that constrains 06:** the server signal is effectively
 main-session-only. **80 of 82 subagent Breaks carry no reason**, and subagents are

@@ -51,7 +51,11 @@ extension's `telemetry.json` declares `response.success` with measurements
 `cache_read_input_tokens`, tagged for Microsoft telemetry. Copilot Chat measures
 exactly what this tool needs and persists none of it locally.
 
-### B. Documentation — UNVERIFIED (no Copilot session data exists here to check)
+### B. Documentation (no Copilot session data exists here to check)
+
+Two claims of different strength live here, and the difference is the point.
+
+#### B1. Session log — VERIFIED from GitHub's published schema
 
 **The session log cannot support Cache Break detection — a firm negative from
 GitHub's own schema.** `github/copilot-sdk`'s streaming-events doc classifies
@@ -61,6 +65,8 @@ the session log."** The one event with the per-request cached split is the one
 event that never reaches `events.jsonl`. What does persist is output tokens per
 message, a compaction record, and per-model *session totals* — enough for a
 session Hit Rate, not for a Waterfall.
+
+#### B2. SQLite ledger — UNVERIFIED (documentation and third-party code only)
 
 **But a SQLite ledger appears to hold exactly the right shape.** GitHub Docs
 describe `~/.copilot/session-store.db`, and four independent third-party parsers
