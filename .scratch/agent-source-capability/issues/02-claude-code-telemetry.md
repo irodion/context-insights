@@ -94,7 +94,7 @@ on 221 deduped Requests across 80 files — a **server-reported Break Cause**:
 | `type` | Requests | maps to CONTEXT.md Break Cause |
 |---|---:|---|
 | `previous_message_not_found` | 126 | **TTL expiry** — 104 of 105 breaks at >1h |
-| `unavailable` | 53 | **cache warm-up** |
+| `unavailable` | 53 | ~~cache warm-up~~ — **REFUTED by [09](09-grade-the-heuristic.md)** |
 | `tools_changed` | 19 | **turn_context change** — all at <2m gap |
 | `model_changed` | 10 | **turn_context change** |
 | `messages_changed` | 10 | **history rewrite / Compaction** |
@@ -125,3 +125,16 @@ more than one file (session forks/resumes copying history), so cross-Session
 aggregation needs a global dedupe. Treat unknown `usage` keys as additive —
 10 versions in ~4 months, with `output_tokens_details` arriving at 2.1.239 and
 `cost-state` at 2.1.246.
+
+## Correction (2026-08-28, from [09](09-grade-the-heuristic.md))
+
+Two claims above are wrong and are corrected here rather than left to propagate:
+
+- **`unavailable` is not cache warm-up.** 45 of its 47 main-session occurrences
+  sit on Requests we classify as *hits*, median Retention **1.0000**, none
+  carrying `cache_missed_input_tokens`. It reads as "the reason is unavailable",
+  not "the cache was unavailable".
+- **"Maps almost one-to-one" was optimistic.** Measured, only **2 of 29**
+  `*_changed` Breaks reach our `turn_context change`. Nothing in the transcript
+  states the tool set, so all 19 `tools_changed` are invisible to the
+  fingerprint. The mapping is a good *taxonomy* match and a poor *outcome* match.
