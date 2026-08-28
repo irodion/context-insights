@@ -156,6 +156,27 @@ class TTLExpiryTest(unittest.TestCase):
         self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
         self.assertAlmostEqual(diagnoses[0]["gap_s"], 3610, delta=1)
 
+    def test_a_cold_resume_days_later_is_ttl_expiry_even_though_the_date_moved(self):
+        """Picking a Session back up days later also moves `current_date`. The prefix
+        expired long before the date did, so the actionable cause is the idle gap:
+        TTL expiry is tested ahead of any turn_context difference."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0), current_date="2026-03-20"))
+            .add(token_count(at(10), input_=20_000, cached=9_600))
+            .add(token_count(at(20), input_=40_000, cached=20_000))
+            .add(turn_end(at(25)))
+            # Two days idle, then the same Session is resumed.
+            .add(turn_start(at(172_800), current_date="2026-03-22"))
+            .add(token_count(at(172_810), input_=41_000, cached=9_600))
+            .add(turn_end(at(172_815)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
+
 
 class HistoryRewriteTest(unittest.TestCase):
     def test_a_cold_turn_opening_within_the_ttl_window_is_ttl_expiry_not_a_rewrite(self):
@@ -228,6 +249,27 @@ class TurnContextChangeTest(unittest.TestCase):
         self.assertIn("effort", diagnoses[0]["detail"])
         self.assertIn("medium", diagnoses[0]["detail"])
         self.assertIn("high", diagnoses[0]["detail"])
+
+    def test_a_config_change_survives_a_long_gap_when_the_prefix_did_not_expire(self):
+        """TTL expiry is tested first, but it needs both a long gap and a cold cache.
+        A Session resumed a day later whose static header survived kept 40% of the
+        prefix, so the gap does not explain the break — the sandbox flip does."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0), file_system_sandbox_policy="read-only"))
+            .add(token_count(at(10), input_=20_000, cached=9_600))
+            .add(token_count(at(20), input_=40_000, cached=20_000))
+            .add(turn_end(at(25)))
+            .add(turn_start(at(86_400), file_system_sandbox_policy="workspace-write"))
+            .add(token_count(at(86_410), input_=41_000, cached=16_000))
+            .add(turn_end(at(86_415)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TURN_CONTEXT)
+        self.assertIn("file_system_sandbox_policy", diagnoses[0]["detail"])
 
     def test_a_new_turn_id_alone_is_not_a_turn_context_change(self):
         """`turn_id` is fresh on every Turn by definition, so it can never be a cause."""

@@ -56,11 +56,14 @@ re-billed ranking.
 **Break Cause** — what invalidated the prefix, attributed to each Cache Break from
 the surrounding log events. One of:
 
-- **turn_context change** — model, effort, sandbox or instructions differ from the
-  previous Turn, so the prompt header changed and the whole prefix died. (`turn_id`
-  is fresh every Turn by design and never counts as a change.)
 - **TTL expiry** — a long Idle Gap, and the cache came back cold. The prefix simply
-  aged out provider-side.
+  aged out provider-side. Tested before any context difference: a Session resumed
+  days later almost always shows a different `current_date` too, but the gap
+  already explains the whole break.
+- **turn_context change** — model, effort, sandbox or instructions differ from the
+  previous Turn, so the prompt header changed and the whole prefix died — and no
+  Idle Gap accounts for it. (`turn_id` is fresh every Turn by design and never
+  counts as a change.)
 - **cache warm-up** — a miss seconds after a cold Request, whose cache write had not
   landed yet. Attributable to the *preceding* break, not to a new cause.
 - **turn-boundary history rewrite** — the first Request of a new Turn, cache still

@@ -1,12 +1,14 @@
 # 010 — Break Cause mis-attribution: only prefix-bearing fields can explain a break
 
-**Status:** open · **Priority:** 1 (corrects a shipped headline number)
+**Status:** change 1 (ordering) done 2026-08-28 · change 2 (allow-list) open,
+blocked on evidence · **Priority:** 1 (corrects a shipped headline number)
 
 ## Context
 
-`explain_breaks()` tests `turn_context_changes()` first, before the TTL branch,
-and diffs *every* field of `turn_context` except `turn_id`. Both choices are
-wrong, and together they move a seventh of the corpus into the wrong bucket.
+`explain_breaks()` tested `turn_context_changes()` first, before the TTL branch,
+and still diffs *every* field of `turn_context` except `turn_id`. Both choices are
+wrong, and together they moved a seventh of the corpus into the wrong bucket. The
+ordering is fixed (see Decisions); the field selection is not.
 
 Census over the corpus (392 Sessions, 475 Cache Breaks, 25.8M Re-billed):
 
@@ -170,4 +172,57 @@ For change 2 (allow-list), only if the Evidence section was satisfied:
 
 ## Decisions
 
-_(fill in with the code)_
+**Change 1 shipped 2026-08-28; change 2 did not.** The ordering fix needs no claim
+about Codex's prompt assembly, so it ships alone exactly as Scope proposed. The
+allow-list stays unshipped: the Evidence section admits only Codex's prompt-assembly
+source, that source was not read this session, and the stated default is that an
+unsourced field stays in. Nothing about `current_date`, the sandbox trio or
+`collaboration_mode` was inferred from the corpus.
+
+**The correction landed where it was predicted to.** Census over the same basis as
+the Context table (392 Sessions, 475 Cache Breaks, 25.8M Re-billed, subagents
+included):
+
+| Break Cause | breaks | re-billed | share | was |
+|---|---:|---:|---:|---:|
+| TTL expiry | 155 | 16.60M | 64.3% | 49.6% |
+| mid-turn history change | 194 | 3.06M | 11.8% | 11.8% |
+| turn-boundary history rewrite | 56 | 2.49M | 9.6% | 9.6% |
+| unknown | 35 | 2.10M | 8.1% | 8.1% |
+| turn_context change | 27 | 0.84M | 3.3% | 18.0% |
+| cache warm-up | 8 | 0.74M | 2.9% | 2.9% |
+
+Exactly the 32 predicted breaks moved, all of them from `turn_context change` to
+`TTL expiry`; no other cause changed by a single break. The two predicted figures
+— TTL ≈ 64% / 16.6M and `turn_context change` ≈ 3.3% / 843k — came out at 64.3% /
+16.60M and 3.3% / 843,349.
+
+**Zero breaks now satisfy the TTL test and still report as `turn_context change`**,
+checked across the whole corpus rather than only on the fixture.
+
+**Four `current_date`-only breaks survive as `turn_context change`, by design.** Of
+the 20, 16 moved; the remaining four are rejected by TTL on Retention (50%, 36%,
+27%, 26% — the static header surviving, the easycall req-16 pattern from 001), not
+on gap, so the reorder cannot reach them. They read as *the date is different*
+today, which is unsatisfying and is precisely what change 2 exists to settle. They
+carry 129k Re-billed between them: real, but not what was buying the correction.
+
+**`CONTEXT.md` gained the precedence, not just the code.** "No Idle Gap accounts
+for it" is now part of what `turn_context change` *means*, so the ordering is a
+vocabulary fact rather than an implementation detail a later refactor could quietly
+reverse. Ticket `001`'s claim that "the TTL branch tests both and runs first" needed
+no edit — the code now says what the doc always did.
+
+**No number moved in `README.md` or `001`.** README's `--explain` sample is
+illustrative and still accurate; 001's mid-Turn percentages rest on
+*mid-turn history change* and *unknown*, neither of which changed. `idle_gap_advice()`
+does not go through `explain_breaks()`, so its ladder is untouched.
+
+**Tests at the `explain_breaks()` seam, one driving and one guarding.** The driving
+test is a cold two-day resume whose `current_date` moved — red before the reorder
+with `'turn_context change' != 'TTL expiry'`. The guard is the discriminator the
+reorder turns on: a day-long gap with a sandbox flip but 40% Retention still reads
+as `turn_context change`, because TTL needs a cold cache as well as a long gap.
+That guard passed without new code; it is there so a future simplification to
+"long gap wins" fails loudly, and it is the fixture form of the four survivors
+above.
