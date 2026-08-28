@@ -106,20 +106,20 @@ adapters are worth building and what each one promises; it does not build them.
   `Thread Source` and how Re-billed Tokens are aggregated — a build decision for
   `docs/tickets`, not a question about source capability, so it sits past this
   map's destination. Worth a repo ticket regardless of the quota verdict.
-- **Three defects in shipped behaviour, found by [09](issues/09-grade-the-heuristic.md).**
-  Each needs a ticket in `docs/tickets`; none is a question about source
+- **Three defects in shipped behaviour, found by [09](issues/09-grade-the-heuristic.md)**
+  and ticketed in `docs/tickets` on 2026-08-28. None is a question about source
   capability, so all three sit past this map's destination.
-  1. **`COLD_RETENTION` is measured against zero, but a total expiry retains a
-     constant prefix block** (~21k in Claude Code; Codex's equivalent is the
-     "static header surviving" noted in `001`). 9 confirmed expiries were missed
-     for this reason, and it is very likely the same cause as the 4 residual
-     `current_date`-only breaks that `010`'s reorder could not reach.
-  2. **The Compaction branch hides real expiry cost.** 12 confirmed expiries are
-     booked at `rebilled = 0`, and where a figure exists `expected − cached`
-     over-counts by 5–14x while `input − cached` lands within 15%.
-  3. **A tool-set-change cause is reachable inside the agent-agnostic rule** —
-     16 of 19 `tools_changed` Breaks have a deferred-tool-load marker in the
-     preceding record.
+  - `013` — **Prefix Floor.** Retention is measured against zero, but a total
+    expiry retains the re-sent head. Confirmed on both sources: Codex's median
+    `cached`/floor ratio is 1.00 and 54% of Breaks sit within 10% of it. It also
+    **closes `010`'s four residual Breaks** — all four have 0% Retention above
+    the floor — without `010`'s blocked change 2.
+  - `014` — **Compaction booked as free.** 12 confirmed expiries at
+    `rebilled = 0`; and the formula that would replace the zero over-counts
+    5–14x, so both halves need fixing together.
+  - `015` — **Tool-set change as a Break Cause.** Reachable from the log alone,
+    so it is not blocked on [06](issues/06-agent-agnostic-contract.md) — and it
+    is evidence *for* keeping the agent-agnostic rule.
 - **Claude Code's `requestId` dedupe rule as vocabulary.** Surfaced by
   [02](issues/02-claude-code-telemetry.md): it is the analogue of Replayed
   Request with a different mechanism and a different fix, and getting it wrong
