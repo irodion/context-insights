@@ -42,14 +42,20 @@ the re-cached head only if the cache ever came back head-only, and on a Session
 where it never does it is just the deepest Cache Break — subtracting it would force
 that Break's own Retention to zero by construction.
 
+**Cache Breaks cannot corroborate each other.** A Break's Cached Input is whatever
+survived a divergence, so it can be any fraction of the prefix; two Breaks landing
+near each other agree that they diverged at similar points, never that either came
+back on the head. The agreeing group must contain a Request that is not a Break —
+the first Request, whose prompt is the head plus one message, or a Compaction,
+which rebuilds the prompt deliberately rather than losing it. That is evidence from
+outside the Breaks being classified.
+
 **Only the smallest rebuild is eligible, and a rebuild that returned nothing is
-one.** A Cache Break can be a partial divergence that kept most of the
-conversation, so two Breaks landing near each other agree on nothing. Looking past
-an uncorroborated smallest value to the next pair cannot be told apart from a
-Session whose deepest Break came back under the head, and would invent a floor
-above surviving conversation. For the same reason a cold start — Cached Input of
-zero — stays in the running as the smallest rebuild a Session can have; discarding
-it would let two partial Breaks above it become the bottom. Under-stating the floor
+one.** Looking past an uncorroborated smallest value to the next pair cannot be told
+apart from a Session whose deepest Break came back under the head, and would invent
+a floor above surviving conversation. For the same reason a cold start — Cached
+Input of zero — stays in the running as the smallest rebuild a Session can have;
+discarding it would let a pair above it become the bottom. Under-stating the floor
 leaves Retention over-reported; over-stating it invents coldness. Under-stating is
 the safe direction.
 

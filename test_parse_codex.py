@@ -280,6 +280,56 @@ class PrefixFloorTest(unittest.TestCase):
         )
         self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
 
+    def test_a_cold_start_outranks_a_compaction_that_would_otherwise_corroborate(self):
+        """The zero rebuild has to survive into the comparison, not just into the list.
+        Here a Compaction and a Break agree at 25k and would pass the non-Break test on
+        their own — but the Session opened with nothing cached, and that zero is the
+        smallest rebuild. Nothing corroborates it, so there is no floor."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=60_000, cached=0))
+            # A Compaction at 25k, and a Break that later lands beside it at 25.5k.
+            .add(token_count(at(20), input_=30_000, cached=25_000))
+            .add(token_count(at(30), input_=80_000, cached=28_000))
+            .add(token_count(at(40), input_=90_000, cached=25_500))
+            .add(turn_end(at(45)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_HISTORY_CHANGE)
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.319, places=2)
+
+    def test_two_breaks_alone_cannot_corroborate_a_floor_on_a_warm_Session(self):
+        """A Cache Break's Cached Input is whatever survived a divergence, so it can be
+        any fraction of the prefix. Two Breaks agreeing tells you they diverged at
+        similar points, never that either came back on the head. On a Session that
+        opened warm there is nothing below them, and the pair must not become a floor
+        on its own — the corroboration has to come from outside the Breaks being
+        classified."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            # Opens warm: 60k already carries conversation, and nothing ever
+            # comes back on the head.
+            .add(token_count(at(10), input_=70_000, cached=60_000))
+            .add(token_count(at(20), input_=80_000, cached=70_000))
+            # Two partial Breaks that merely landed near each other.
+            .add(token_count(at(30), input_=90_000, cached=40_000))
+            .add(token_count(at(40), input_=95_000, cached=41_000))
+            .add(turn_end(at(45)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(
+            [d["cause"] for d in diagnoses],
+            [parse_codex.CAUSE_HISTORY_CHANGE, parse_codex.CAUSE_HISTORY_CHANGE],
+        )
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
+
     def test_a_hit_is_not_evidence_of_where_the_head_is(self):
         """A Hit's Cached Input is the whole previous prompt, so it bounds the head from
         *above*: the head is at most that, never exactly it. Letting a low Hit
@@ -311,32 +361,26 @@ class PrefixFloorTest(unittest.TestCase):
             # Resumed warm: this Request's 60k already carries conversation, not a floor.
             .add(turn_start(at(0)))
             .add(token_count(at(10), input_=70_000, cached=60_000))
-            .add(token_count(at(20), input_=80_000, cached=70_000))
-            .add(turn_end(at(25)))
-            # An hour idle; the cache comes back on the header alone, revealing the floor.
+            # A Compaction rebuilds the prompt down onto the head: 21.5k, and not a
+            # Break, so it is evidence from outside the Breaks below.
+            .add(token_count(at(20), input_=30_000, cached=21_500))
+            .add(token_count(at(30), input_=80_000, cached=30_000))
+            .add(turn_end(at(35)))
+            # An hour idle; the cache comes back on that same head.
             .add(turn_start(at(3_600)))
-            .add(token_count(at(3_625), input_=85_000, cached=21_000))
-            .add(token_count(at(3_700), input_=95_000, cached=85_000))
+            .add(token_count(at(3_625), input_=90_000, cached=21_000))
+            # Mid-Turn: the floor plus half of the 69k recoverable prefix.
+            .add(token_count(at(3_700), input_=95_000, cached=55_500))
             .add(turn_end(at(3_705)))
-            # A second resume lands on the same head, corroborating that floor.
-            .add(turn_start(at(7_300)))
-            .add(token_count(at(7_325), input_=100_000, cached=21_500))
-            # Mid-Turn: the floor plus half of the 79k recoverable prefix.
-            .add(token_count(at(7_425), input_=110_000, cached=60_500))
-            .add(turn_end(at(7_430)))
         )
 
         diagnoses = parse_codex.explain_breaks(fixture.analyzed())
 
         self.assertEqual(
             [d["cause"] for d in diagnoses],
-            [
-                parse_codex.CAUSE_TTL_EXPIRY,
-                parse_codex.CAUSE_TTL_EXPIRY,
-                parse_codex.CAUSE_HISTORY_CHANGE,
-            ],
+            [parse_codex.CAUSE_TTL_EXPIRY, parse_codex.CAUSE_HISTORY_CHANGE],
         )
-        self.assertAlmostEqual(diagnoses[2]["retention"], 0.5, places=2)
+        self.assertAlmostEqual(diagnoses[1]["retention"], 0.5, places=2)
 
 
 class HistoryRewriteTest(unittest.TestCase):

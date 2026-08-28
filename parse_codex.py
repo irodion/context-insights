@@ -47,7 +47,8 @@ COLD_RETENTION = 0.25  # retention above the Prefix Floor below this => cold, no
 # and the density trough separating them from the 0.3-0.7 bulge spans 0.20-0.40.
 WARMUP_GAP_S = 60  # a cold Request's cache write can still be in flight this long after
 # Two cache rebuilds coming back this close to the same low value are agreeing on a
-# re-cached head; one Request alone is just the deepest Break. The tolerance is the one
+# re-cached head, provided they are not both Cache Breaks; one Request alone is just
+# the deepest Break. The tolerance is the one
 # ticket 013 measured the floor with (Claude Code matched its own first Request within
 # 10% on 88 of 120 Breaks), not a fresh constant.
 FLOOR_CORROBORATION = 0.10
@@ -209,6 +210,16 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     never does, the smallest value is simply the deepest Cache Break, and subtracting
     it would force that Break's own Retention to zero by construction.
 
+    **Cache Breaks cannot corroborate each other.** A Break's Cached Input is whatever
+    survived a divergence, so it can be any fraction of the prefix; two Breaks landing
+    near each other agree that they diverged at similar points, never that either came
+    back on the head. The agreeing group must therefore contain a Request that is not a
+    Break — the first Request, whose prompt is the head plus one message, or a
+    Compaction, which rebuilds the prompt deliberately rather than losing it. That is
+    evidence from outside the Breaks being classified. (A Compaction's Cached Input can
+    still carry summary text, so the floor it corroborates is an estimate, not a
+    reading; taking the *smallest* agreeing value bounds how far it can be wrong.)
+
     Only the *smallest* rebuild is eligible, and a rebuild that returned nothing counts
     as one — a cold start is the smallest rebuild a Session can have, and dropping it
     would let two partial Breaks above it become the bottom and invent a floor over the
@@ -230,10 +241,14 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     On a Session still being written, the floor is provisional: a later, colder rebuild
     can lower it, which lowers every Retention already reported for that Session.
     """
-    rebuilds = sorted(r["cached"] for r in requests if r["kind"] != "hit")
-    if len(rebuilds) < 2 or rebuilds[1] > rebuilds[0] * (1 + FLOOR_CORROBORATION):
+    rebuilds = sorted((r["cached"], r["kind"]) for r in requests if r["kind"] != "hit")
+    if not rebuilds:
         return 0
-    return rebuilds[0]
+    lowest = rebuilds[0][0]
+    agreeing = [kind for cached, kind in rebuilds if cached <= lowest * (1 + FLOOR_CORROBORATION)]
+    if len(agreeing) < 2 or all(kind == "break" for kind in agreeing):
+        return 0
+    return lowest
 
 
 def analyze(session):
