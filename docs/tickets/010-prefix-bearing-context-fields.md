@@ -207,10 +207,10 @@ on gap, so the reorder cannot reach them. They read as *the date is different*
 today, which is unsatisfying and is precisely what change 2 exists to settle. They
 carry 129k Re-billed between them: real, but not what was buying the correction.
 
-**`CONTEXT.md` gained the precedence, not just the code.** "No Idle Gap accounts
-for it" is now part of what `turn_context change` *means*, so the ordering is a
-vocabulary fact rather than an implementation detail a later refactor could quietly
-reverse. Ticket `001`'s claim that "the TTL branch tests both and runs first" needed
+**`CONTEXT.md` gained the precedence, not just the code.** "TTL expiry did not
+already explain it" is now part of what `turn_context change` *means*, so the
+ordering is a vocabulary fact rather than an implementation detail a later
+refactor could quietly reverse. Ticket `001`'s claim that "the TTL branch tests both and runs first" needed
 no edit — the code now says what the doc always did.
 
 **No number moved in `README.md` or `001`.** README's `--explain` sample is
