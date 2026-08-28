@@ -192,8 +192,7 @@ class PrefixFloorTest(unittest.TestCase):
             .add(turn_start(at(0), current_date="2026-03-20"))
             # The Session opens on the static header alone: 21k is the Prefix Floor.
             .add(token_count(at(10), input_=30_000, cached=21_000))
-            .add(token_count(at(20), input_=42_000, cached=30_000))
-            .add(token_count(at(30), input_=55_000, cached=42_000))
+            .add(token_count(at(20), input_=55_000, cached=30_000))
             .add(turn_end(at(35)))
             # Two days idle, and the cache comes back holding the header and nothing else.
             .add(turn_start(at(172_800), current_date="2026-03-22"))
