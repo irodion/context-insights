@@ -60,10 +60,11 @@ the surrounding log events. One of:
   aged out provider-side. Tested before any context difference: a Session resumed
   days later almost always shows a different `current_date` too, but the gap
   already explains the whole break.
-- **turn_context change** — model, effort, sandbox or instructions differ from the
-  previous Turn, so the prompt header changed and the whole prefix died — and
-  TTL expiry did not already explain it. (`turn_id` is fresh every Turn by design
-  and never counts as a change.)
+- **turn_context change** — one or more tracked `turn_context` fields differ from
+  the previous Turn (model, effort, sandbox and instructions among them), so the
+  prompt header changed and the whole prefix died — and TTL expiry did not already
+  explain it. (`turn_id` is fresh every Turn by design and never counts as a
+  change.)
 - **cache warm-up** — a miss seconds after a cold Request, whose cache write had not
   landed yet. Attributable to the *preceding* break, not to a new cause.
 - **turn-boundary history rewrite** — the first Request of a new Turn, cache still
