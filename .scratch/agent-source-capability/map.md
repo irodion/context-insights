@@ -57,6 +57,11 @@ adapters are worth building and what each one promises; it does not build them.
 
 ## Not yet specified
 
+<!-- 09 was a hole found by the user 2026-08-28: 06 asks whether to trust the
+     server over the heuristic, but nobody had measured how often they disagree.
+     Ground truth existed and went unused. Worth remembering as a charting
+     failure mode: a decision ticket whose premise is an unmeasured fact. -->
+
 - What a dollar figure means for a user actually on API billing, and whether a
   pricing table earns its maintenance for them. Parked alongside `009`.
 - Whether any source other than Codex can support Watch Mode. **Claude Code:
