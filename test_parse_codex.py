@@ -227,35 +227,53 @@ class PrefixFloorTest(unittest.TestCase):
         self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_HISTORY_CHANGE)
         self.assertAlmostEqual(diagnoses[0]["retention"], 0.5, places=2)
 
-    def test_one_Request_below_the_head_does_not_destroy_the_floor(self):
-        """A Break can come back holding *less* than the head. That lone low value has
-        no companion, but the head above it does — so the floor is the smallest
-        corroborated Cached Input, not the smallest one. (The easycall Session in 001
-        is this shape: a lone 5,504 under a 9,600 head seen twice.)"""
+    def test_two_partial_breaks_near_each_other_do_not_establish_a_floor(self):
+        """A Cache Break is not evidence of a head-only return — it can be a partial
+        divergence that kept most of the conversation. Two of those landing near each
+        other agree on nothing, and the head here is the 20k the Session opened on,
+        far below them. Only the *smallest* rebuild can be the floor: when nothing
+        corroborates it, Retention stays unadjusted rather than measured against a
+        baseline invented higher up."""
         fixture = (
             RolloutFixture(self)
             .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=30_000, cached=21_000))
-            .add(token_count(at(20), input_=55_000, cached=30_000))
-            .add(turn_end(at(25)))
-            # A deep expiry that came back under the head: alone down there.
-            .add(turn_start(at(3_600)))
-            .add(token_count(at(3_625), input_=60_000, cached=5_000))
-            .add(token_count(at(3_700), input_=65_000, cached=60_000))
-            .add(turn_end(at(3_705)))
-            # Back onto the head, corroborating the 21k first Request.
-            .add(turn_start(at(7_300)))
-            .add(token_count(at(7_325), input_=70_000, cached=21_000))
-            .add(turn_end(at(7_330)))
+            # The head is 20k, and no later Request ever returns to it.
+            .add(token_count(at(10), input_=30_000, cached=20_000))
+            .add(token_count(at(20), input_=80_000, cached=30_000))
+            # Two partial Breaks, 50k and 52k: close to each other, nowhere near the head.
+            .add(token_count(at(30), input_=90_000, cached=50_000))
+            .add(token_count(at(40), input_=100_000, cached=52_000))
+            .add(turn_end(at(45)))
         )
 
         diagnoses = parse_codex.explain_breaks(fixture.analyzed())
 
         self.assertEqual(
             [d["cause"] for d in diagnoses],
-            [parse_codex.CAUSE_TTL_EXPIRY, parse_codex.CAUSE_TTL_EXPIRY],
+            [parse_codex.CAUSE_HISTORY_CHANGE, parse_codex.CAUSE_HISTORY_CHANGE],
         )
-        self.assertAlmostEqual(diagnoses[1]["retention"], 0.0, places=2)
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.625, places=2)
+
+    def test_a_hit_is_not_evidence_of_where_the_head_is(self):
+        """A Hit's Cached Input is the whole previous prompt, so it bounds the head from
+        *above*: the head is at most that, never exactly it. Letting a low Hit
+        corroborate the floor therefore over-states it, and over-stating invents
+        coldness on a Break that kept conversation."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=22_000, cached=20_000))
+            # A Hit early on, while the whole prompt is barely more than the head.
+            .add(token_count(at(20), input_=80_000, cached=21_000))
+            .add(token_count(at(30), input_=90_000, cached=30_000))
+            .add(turn_end(at(35)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_HISTORY_CHANGE)
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.375, places=2)
 
     def test_a_warm_resume_does_not_set_the_floor_above_surviving_conversation(self):
         """The floor is the smallest non-zero Cached Input, not the first one. A Session

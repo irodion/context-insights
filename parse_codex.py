@@ -15,7 +15,6 @@ import collections
 import functools
 import hashlib
 import http.server
-import itertools
 import json
 import sys
 import threading
@@ -198,20 +197,27 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     cache rebuilds agree on, or zero when nothing corroborates one.
 
     Only a Request that (re)built the prefix from the head is evidence about the head:
-    the first Request, every Cache Break, and every Compaction — a hit is the one kind
-    that continues an existing prefix. A hit's Cached Input is the head *plus* the
-    conversation, so admitting hits makes the rule pair values that are merely close:
-    over the corpus that lands 1.24x above the minimum at the median and above 1.5x on
-    45% of Sessions, against 1.00 and 8% here.
+    the first Request, every Cache Break, and every Compaction. A hit is the one kind
+    that continues an existing prefix, and its Cached Input is the whole previous
+    prompt — which bounds the head from *above*, never locates it. Corroborating with
+    hits therefore over-states the floor. (On this corpus it changes no Break Cause:
+    admitting hits finds a floor on 192 Sessions rather than 141, with identical
+    classifications. It is excluded for the direction of the error, not for a count.)
 
     Corroboration is what makes the value a floor at all. The smallest Cached Input is
     the re-cached head *if the cache ever came back head-only*; on a Session where it
     never does, the smallest value is simply the deepest Cache Break, and subtracting
-    it would force that Break's own Retention to zero by construction. Taking the
-    smallest *corroborated* value rather than the smallest outright also survives a
-    Break that came back holding less than the head, which would otherwise take the
-    floor down with it. Uncorroborated, the floor is zero and Retention stays
-    unadjusted — the honest reading when no Request ever showed the head.
+    it would force that Break's own Retention to zero by construction.
+
+    Only the *smallest* rebuild is eligible. Climbing to the next pair when the
+    smallest is uncorroborated looks like it recovers a floor from a Session whose
+    deepest Break came back under the head, but it cannot be told apart from two
+    partial Breaks that merely landed near each other well above the head — the same
+    data shape, opposite answers. Refusing to climb under-states the floor on the
+    first shape and never over-states it on the second, which is the safe direction:
+    an over-stated floor invents coldness on a Break that really did keep
+    conversation. Uncorroborated, the floor is zero and Retention stays unadjusted —
+    the honest reading when no Request ever showed the head.
 
     The minimum is preferred over the Session's *first* Cached Input, which reads as
     the more literal cold-start prefix but is only that when the Session began cold —
@@ -222,10 +228,9 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     can lower it, which lowers every Retention already reported for that Session.
     """
     rebuilds = sorted(r["cached"] for r in requests if r["cached"] and r["kind"] != "hit")
-    for low, above in itertools.pairwise(rebuilds):
-        if above <= low * (1 + FLOOR_CORROBORATION):
-            return low
-    return 0
+    if len(rebuilds) < 2 or rebuilds[1] > rebuilds[0] * (1 + FLOOR_CORROBORATION):
+        return 0
+    return rebuilds[0]
 
 
 def analyze(session):

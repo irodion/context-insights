@@ -31,18 +31,25 @@ Request and so re-caches immediately after any Cache Break: system header, tool
 definitions, instructions. It is not conversation, so it must not count as
 surviving conversation. Derived per Session as the smallest non-zero Cached Input
 across the Requests that *rebuilt* the prefix — the first Request, every Cache
-Break and every Compaction, a Hit being the one kind that continues an existing
-prefix — and **only when a second such rebuild lands within 10% of it**. Both
-conditions carry weight. A Hit's Cached Input is the head plus the conversation, so
-admitting Hits pairs values that are merely close rather than agreeing on a head.
-And corroboration is what makes the value a floor at all: the smallest Cached Input
-is the re-cached head only if the cache ever came back head-only, and on a Session
-where it never does, the smallest value is just the deepest Cache Break —
-subtracting it would force that Break's own Retention to zero by construction.
-Uncorroborated, the Prefix Floor is zero and Retention stays unadjusted, which is
-the honest reading when no Request ever showed the head. On a Session still being
-written the floor is provisional: a later, colder rebuild can lower it, and lower
-every Retention already reported for that Session.
+Break and every Compaction; a Hit continues an existing prefix, and its Cached Input
+is the whole previous prompt, which bounds the head from above rather than locating
+it. The smallest such value is the Prefix Floor **only when a second rebuild lands
+within 10% of it**; otherwise the Prefix Floor is zero and Retention stays
+unadjusted.
+
+Corroboration is what makes the value a floor at all: the smallest Cached Input is
+the re-cached head only if the cache ever came back head-only, and on a Session
+where it never does it is just the deepest Cache Break — subtracting it would force
+that Break's own Retention to zero by construction. **Only the smallest rebuild is
+eligible.** A Cache Break can be a partial divergence that kept most of the
+conversation, so two Breaks landing near each other agree on nothing; looking past
+an uncorroborated smallest value to the next pair cannot be told apart from a
+Session whose deepest Break came back under the head, and would invent a floor above
+surviving conversation. Under-stating the floor leaves Retention over-reported;
+over-stating it invents coldness. Under-stating is the safe direction.
+
+On a Session still being written the floor is provisional: a later, colder rebuild
+can lower it, and lower every Retention already reported for that Session.
 
 **Retention** — on a Cache Break, the share of the *recoverable* prefix that
 survived, measured above the Prefix Floor: (Cached Input − Prefix Floor) /
