@@ -143,6 +143,19 @@ Two conditions fix it, and both were needed:
    floor by counting it, which is again the safe direction and again strictly better
    on the corpus: *unknown* falls by 8 Breaks and *mid-turn history change* gains 9.
 
+   Nor can two Cache Breaks corroborate each other, which is the same defect a
+   fourth time. A Break's Cached Input is whatever survived a divergence — any
+   fraction of the prefix — so two Breaks agreeing say they diverged at similar
+   points, not that either came back on the head. On a Session that opened warm
+   there is nothing beneath them to out-rank the pair: `70k/60k → 80k/70k →
+   90k/40k → 95k/41k` set a 40k floor from two Breaks that each kept half. **The
+   agreeing group must contain a non-Break rebuild** — the first Request, whose
+   prompt is the head plus one message, or a Compaction, which rebuilds the prompt
+   deliberately rather than losing it. Over the corpus that corroborator is the
+   first Request on 123 Sessions and a Compaction on 4. A Compaction's Cached Input
+   can still carry summary text, so the floor is an estimate rather than a reading;
+   taking the smallest agreeing value bounds the error.
+
 2. **Only rebuilds are candidates** — the first Request, Cache Breaks, Compactions.
    A Hit's Cached Input is the whole previous prompt, so it bounds the head from
    *above* rather than locating it, and corroborating with Hits can only over-state.
@@ -155,14 +168,14 @@ Compactions are candidates because a Compaction *is* a cache rebuild, deliberate
 rather than accidental. Excluding them costs 3 of the 20 `current_date`-only
 Breaks, each of which has a Compaction sitting on the head at 21,248–23,296.
 
-269 of 401 Sessions have no corroborated floor and report the un-floored ratio —
+274 of 401 Sessions have no corroborated floor and report the un-floored ratio —
 the honest reading, since nothing in those logs shows a head-only return. The 10%
 tolerance is not a fresh constant: it is the one this ticket's Evidence measured
 the floor with.
 
 The fallback Scope asked to have stated: the floor is 0 whenever nothing
 corroborates one, which restores exactly today's unadjusted ratio. Prefix Floor
-across the 132 Sessions that have one: median 11,008 tokens, range 2,432–24,320.
+across the 127 Sessions that have one: median 11,008 tokens, range 2,432–24,320.
 
 **`COLD_RETENTION` stays 0.25, re-read rather than inherited.** The adjusted
 distribution is sharply bimodal: 284 of 478 Breaks retain *exactly nothing* above
@@ -171,16 +184,16 @@ trough spanning roughly 0.20–0.40. 0.25 sits inside it, so the constant surviv
 on the new measure for a new reason. It was not tuned to a bucket count — the
 sweep below shows tuning cannot buy what the acceptance asked for anyway.
 
-**Corrected census** (401 Sessions, 479 Cache Breaks, 26.05M Re-billed, subagents
-included — the same basis as `010`'s table, over a corpus that has grown by a
-Session and a Break since `010` measured it):
+**Corrected census** (401 Sessions, 481 Cache Breaks, 26.28M Re-billed, subagents
+included — nominally `010`'s basis, over a corpus that is live and has grown by a
+Session and six Breaks while this ticket was being worked):
 
 | Break Cause | breaks | re-billed | share | was |
 |---|---:|---:|---:|---:|
-| TTL expiry | 167 | 17.04M | 65.4% | 64.3% |
-| unknown | 144 | 3.78M | 14.5% | 8.1% |
-| turn-boundary history rewrite | 49 | 2.28M | 8.7% | 9.6% |
-| mid-turn history change | 71 | 1.27M | 4.9% | 11.8% |
+| TTL expiry | 167 | 17.13M | 65.2% | 64.3% |
+| unknown | 145 | 3.90M | 14.8% | 8.1% |
+| turn-boundary history rewrite | 50 | 2.30M | 8.8% | 9.6% |
+| mid-turn history change | 71 | 1.27M | 4.8% | 11.8% |
 | cache warm-up | 26 | 0.99M | 3.8% | 2.9% |
 | turn_context change | 22 | 0.69M | 2.6% | 3.3% |
 
@@ -211,7 +224,7 @@ called cold. **What the criterion was actually
 guarding is met** — no Break that kept real conversation is newly cold, and the
 `explain_breaks()` guards below pin that.
 
-**The cost is a large *unknown* bucket: 37 → 144 Breaks, 8.1% → 14.5% of
+**The cost is a large *unknown* bucket: 37 → 145 Breaks, 8.1% → 14.8% of
 Re-billed.** That is honest rather than good — the log genuinely does not account
 for them, and `CONTEXT.md` already says to prefer saying so over inventing a
 cause. `015` is where the mass goes next: it identifies 0 of 19 tool-set changes
