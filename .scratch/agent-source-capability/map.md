@@ -57,8 +57,6 @@ adapters are worth building and what each one promises; it does not build them.
 
 ## Not yet specified
 
-- Whether `docs/tickets/005` changes shape if Claude Code turns out to be the
-  better *reference* source rather than the third adapter.
 - What a dollar figure means for a user actually on API billing, and whether a
   pricing table earns its maintenance for them. Parked alongside `009`.
 - Whether any source other than Codex can support Watch Mode. **Claude Code:
@@ -80,7 +78,12 @@ adapters are worth building and what each one promises; it does not build them.
 ## Out of scope
 
 - **Building any adapter.** This map decides which are worth building;
-  `docs/tickets/003` and `005` do the building.
+  `docs/tickets/003` and `005` do the building. Acted on 2026-08-28:
+  [02](issues/02-claude-code-telemetry.md) resolved the open fog about whether
+  `005` changes shape — it does. `005` was rewritten around the measured format
+  and is now the highest-value unblocked repo ticket, and the part of it that
+  needs [06](issues/06-agent-agnostic-contract.md) was split out as
+  `docs/tickets/012` rather than left to pre-empt that decision.
 - **Rewriting `docs/tickets/009`.** Parked by decision at chart time: it resumes
   once the matrix can give it a cross-source answer instead of a Codex-only one.
 - **Any change to `parse_codex.py`.** This map produces a decision, not code.
