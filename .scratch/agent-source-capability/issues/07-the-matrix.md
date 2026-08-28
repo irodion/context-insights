@@ -3,6 +3,7 @@
 Type: grilling
 Status: open
 Blocked by: 01, 02, 04, 05, 06
+See also: 08 (does not block — see below)
 
 ## Question
 
@@ -21,6 +22,10 @@ twice, server-side** (2026-07-13 and 2026-08-26), so a window must be selected b
 model-weighted across a 7.4x range, so quota is not linear in tokens even within
 one source. If the matrix needs a **common cost unit** row, this is where that
 gets decided or declared impossible.
+
+If [08](08-verify-copilot-ledger.md) is unresolved when this ticket is taken,
+record Copilot as *log: not viable (schema-confirmed); ledger: unverified* and say
+so in the cell rather than waiting on it.
 
 Then decide from it: which adapters are worth building and in what order; what
 each one honestly promises and where it degrades; and what changes in
