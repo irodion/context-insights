@@ -80,13 +80,19 @@ was in; all six are defined in `CONTEXT.md`. Two additions earned their place:
 - *cache warm-up* — after a cold Request, the next Request misses too because the
   cache write has not landed (easycall req 18, 10s later, still cold). Without it
   that Request reads as a second, unrelated break and double-counts one root cause.
-- *mid-turn history change* — 82% of mid-Turn breaks keep partial prefix, spread
-  evenly across retention rather than clustering at the 0.8 threshold, so they are
-  real divergences and not artifacts of `BREAK_RATIO`.
+- *mid-turn history change* — mid-Turn breaks keep partial prefix spread evenly
+  across retention rather than clustering at the 0.8 threshold, so they are real
+  divergences and not artifacts of `BREAK_RATIO`.
 
-*unknown* survives for cold mid-Turn breaks with no gap and no context change
-(~18% of mid-Turn breaks). Nothing in the log accounts for those; the fallback
-says so instead of guessing.
+*unknown* survives for cold mid-Turn breaks with no gap and no context change.
+Nothing in the log accounts for those; the fallback says so instead of guessing.
+
+**The 82% / 18% split between the two was measured against zero and has since
+inverted.** Ticket `013` re-measured Retention above the Prefix Floor: mid-Turn
+breaks now read 21% *mid-turn history change*, 68% *unknown*, 11% *cache warm-up*
+over 241 mid-Turn breaks. The reasoning above stands for the 51 that remain — what
+changed is how many qualify, not why they qualify. `015` accounts for part of the
+new *unknown* mass: 0 of 19 tool-set changes are identified today.
 
 **`turn_id` must be excluded from the `turn_context` diff.** It is fresh on every
 Turn, so a naive diff blames every single turn-boundary break on a context change.
@@ -121,7 +127,10 @@ explanation and those 12 now read as TTL expiry (re-billed moves 7.2M → 8.4M).
 The review's proposed remedy — reclassify cold Turn openings as *unknown* — was
 not taken: at a 7 min cold gap "unknown" discards the best available explanation,
 and it would have made easycall req 16 unknown (gap 1m49s, surviving prefix ≈ the
-session's static header exactly), regressing this ticket's acceptance. A 109s gap
+session's static header exactly), regressing this ticket's acceptance. That
+"surviving prefix ≈ the static header" pattern is named in `013`: it is the Prefix
+Floor, and Retention is now measured above it. Req 16 still reads *turn-boundary
+history rewrite*, at 10% of the recoverable prefix rather than 16% of the whole. A 109s gap
 cannot be expiry. Retention alone cannot separate "cache was cold" from "prefix
 diverged early" — the Idle Gap is what separates them, which is why the TTL branch
 tests both and runs first.

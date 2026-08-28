@@ -26,10 +26,22 @@
 
 **Hit Rate** — Cached Input / total input tokens, per Request or aggregated over a Session.
 
-**Retention** — on a Cache Break, Cached Input / Expected Cache: how much of the
-prefix survived. Near zero means the cache was *cold* (nothing to reuse); a middling
-value means the prompt *diverged* part-way through while the cache was still alive.
-The two call for different fixes, so they are diagnosed separately.
+**Prefix Floor** — the head of the prompt that is re-sent identically on every
+Request and so re-caches immediately after any Cache Break: system header, tool
+definitions, instructions. It is not conversation, so it must not count as
+surviving conversation. Derived per Session as the smallest non-zero Cached Input
+across its Requests — a lower bound, which can under-state the floor but can never
+over-state it and so can never invent coldness. Zero when the Session never cached
+anything.
+
+**Retention** — on a Cache Break, the share of the *recoverable* prefix that
+survived, measured above the Prefix Floor: (Cached Input − Prefix Floor) /
+(Expected Cache − Prefix Floor), clamped to zero. Near zero means the cache was
+*cold* — nothing but the re-sent head came back; a middling value means the prompt
+*diverged* part-way through while the cache was still alive. The two call for
+different fixes, so they are diagnosed separately. Measured against zero rather
+than against the floor, a Break that kept no conversation at all still reports
+Prefix Floor / Expected Cache, which on a short Session is a large number.
 
 **Idle Gap** — seconds between a Request and the Request before it. The dominant
 predictor of a Cache Break: measured over this corpus, under 2 minutes 3% of

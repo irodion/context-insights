@@ -176,6 +176,67 @@ class TTLExpiryTest(unittest.TestCase):
         self.assertIn("current_date", diagnoses[0]["detail"])
 
 
+class PrefixFloorTest(unittest.TestCase):
+    """Every prompt re-sends an identical head — system header, tool definitions,
+    instructions — which the provider re-caches immediately. Retention is measured
+    above that Prefix Floor, so a Break that kept nothing of the conversation reads
+    as cold rather than as `floor / expected`."""
+
+    def test_a_resume_that_kept_only_the_prefix_floor_is_ttl_expiry(self):
+        """The corpus shape ticket 010 could not reach: a multi-day resume whose
+        `current_date` moved and whose cache came back holding exactly the static
+        header. Measured against zero it looks like 38% of the prefix survived; above
+        the floor it kept nothing, and the expired prefix is the cause."""
+        fixture = (
+            RolloutFixture(self)
+            .add(turn_start(at(0), current_date="2026-03-20"))
+            # The Session opens on the static header alone: 21k is the Prefix Floor.
+            .add(token_count(at(10), input_=30_000, cached=21_000))
+            .add(token_count(at(20), input_=42_000, cached=30_000))
+            .add(token_count(at(30), input_=55_000, cached=42_000))
+            .add(turn_end(at(35)))
+            # Two days idle, and the cache comes back holding the header and nothing else.
+            .add(turn_start(at(172_800), current_date="2026-03-22"))
+            .add(token_count(at(172_810), input_=60_000, cached=21_000))
+            .add(turn_end(at(172_815)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(len(diagnoses), 1)
+        self.assertEqual(diagnoses[0]["cause"], parse_codex.CAUSE_TTL_EXPIRY)
+        self.assertAlmostEqual(diagnoses[0]["retention"], 0.0, places=2)
+
+    def test_a_warm_resume_does_not_set_the_floor_above_surviving_conversation(self):
+        """The floor is the smallest non-zero Cached Input, not the first one. A Session
+        resumed warm opens with conversation already cached, so reading the floor off its
+        first Request would over-state it and call a Break that kept half the
+        conversation cold."""
+        fixture = (
+            RolloutFixture(self)
+            # Resumed warm: this Request's 60k already carries conversation, not a floor.
+            .add(turn_start(at(0)))
+            .add(token_count(at(10), input_=70_000, cached=60_000))
+            .add(token_count(at(20), input_=80_000, cached=70_000))
+            .add(turn_end(at(25)))
+            # An hour idle; the cache comes back on the header alone, revealing the floor.
+            .add(turn_start(at(3_600)))
+            .add(token_count(at(3_625), input_=85_000, cached=21_000))
+            .add(token_count(at(3_700), input_=95_000, cached=85_000))
+            # Mid-Turn: the floor plus half of the 74k recoverable prefix.
+            .add(token_count(at(3_760), input_=100_000, cached=58_000))
+            .add(turn_end(at(3_765)))
+        )
+
+        diagnoses = parse_codex.explain_breaks(fixture.analyzed())
+
+        self.assertEqual(
+            [d["cause"] for d in diagnoses],
+            [parse_codex.CAUSE_TTL_EXPIRY, parse_codex.CAUSE_HISTORY_CHANGE],
+        )
+        self.assertAlmostEqual(diagnoses[1]["retention"], 0.5, places=2)
+
+
 class HistoryRewriteTest(unittest.TestCase):
     def test_a_cold_turn_opening_within_the_ttl_window_is_ttl_expiry_not_a_rewrite(self):
         """A Turn opening cold after minutes of idle is the prefix ageing out, not
@@ -250,12 +311,14 @@ class TurnContextChangeTest(unittest.TestCase):
 
     def test_a_config_change_survives_a_long_gap_when_the_prefix_did_not_expire(self):
         """TTL expiry is tested first, but it needs both a long gap and a cold cache.
-        A Session resumed a day later whose static header survived kept 40% of the
-        prefix, so the gap does not explain the break — the sandbox flip does."""
+        A Session resumed a day later that kept 40% of the recoverable prefix — real
+        conversation, above the Prefix Floor — did not expire, so the gap does not
+        explain the break. The sandbox flip does."""
         fixture = (
             a_turn(RolloutFixture(self), file_system_sandbox_policy="read-only")
             .add(turn_start(at(86_400), file_system_sandbox_policy="workspace-write"))
-            .add(token_count(at(86_410), input_=90_000, cached=32_000))
+            # Floor is 40k; 56k is the floor plus 40% of the 40k recoverable prefix.
+            .add(token_count(at(86_410), input_=90_000, cached=56_000))
             .add(turn_end(at(86_415)))
         )
 
@@ -370,14 +433,17 @@ class CacheWarmupTest(unittest.TestCase):
 
 class MidTurnBreakTest(unittest.TestCase):
     def test_partial_retention_mid_turn_is_diagnosed_as_a_history_change(self):
-        """Part of the prefix survived, so the cache was alive and the prompt itself
-        diverged part-way through — history was truncated or rewritten inside the Turn."""
+        """Half the *recoverable* prefix survived, so the cache was alive and the prompt
+        itself diverged part-way through — history was truncated or rewritten inside the
+        Turn. Retaining the Prefix Floor plus half the conversation is not cold."""
         fixture = (
             RolloutFixture(self)
             .add(turn_start(at(0)))
-            .add(token_count(at(10), input_=60_000, cached=40_000))
+            # The Session opens on the static header alone: 20k is the Prefix Floor.
+            .add(token_count(at(10), input_=60_000, cached=20_000))
             .add(token_count(at(20), input_=80_000, cached=60_000))
-            .add(token_count(at(30), input_=90_000, cached=40_000))
+            # 50k is the floor plus half of the 60k recoverable prefix.
+            .add(token_count(at(30), input_=90_000, cached=50_000))
             .add(turn_end(at(35)))
         )
 
