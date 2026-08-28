@@ -1,7 +1,8 @@
 # 010 — Break Cause mis-attribution: only prefix-bearing fields can explain a break
 
 **Status:** change 1 (ordering) done 2026-08-28 · change 2 (allow-list) open,
-blocked on evidence · **Priority:** 1 (corrects a shipped headline number)
+blocked on evidence · residual closed by `013` 2026-08-28 · **Priority:** 1
+(corrects a shipped headline number)
 
 ## Context
 
@@ -206,6 +207,16 @@ the 20, 16 moved; the remaining four are rejected by TTL on Retention (50%, 36%,
 on gap, so the reorder cannot reach them. They read as *the date is different*
 today, which is unsatisfying and is precisely what change 2 exists to settle. They
 carry 129k Re-billed between them: real, but not what was buying the correction.
+
+**Closed by `013`, without change 2.** All four read *TTL expiry* as of 2026-08-28.
+`013` found why they were rejected on Retention: Retention was measured against
+zero, but every prompt re-sends an identical head that re-caches immediately, so a
+Break that kept no conversation still scored `floor / expected`. Measured above
+that Prefix Floor all four retain 0%, and the TTL branch claims them. All 20
+`current_date`-only Breaks now read *TTL expiry*, so the residual is gone. **This
+does not unblock change 2** — nothing was learned about whether `current_date` is
+prefix-bearing, and the allow-list still waits on Codex's prompt-assembly source.
+It removes the pressure that made change 2 look urgent.
 
 **`CONTEXT.md` gained the precedence, not just the code.** "TTL expiry did not
 already explain it" is now part of what `turn_context change` *means*, so the

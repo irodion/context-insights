@@ -39,7 +39,10 @@ REPLAY_BURST_MS = 200  # subagent replay: consecutive events closer than this
 # Providers keep a prefix ~5-10 min; cold Turn openings in this corpus cluster at
 # 5-10 min, so the low end is the honest cut — above it, expiry explains the miss.
 TTL_GAP_S = 300
-COLD_RETENTION = 0.25  # cached < 25% of expected cache => the cache went cold, not diverged
+COLD_RETENTION = 0.25  # retention above the Prefix Floor below this => cold, not diverged
+# Kept at 0.25 after the floor adjustment rather than inherited: re-read off the adjusted
+# distribution, which is bimodal — 284 of 478 Breaks retain exactly nothing above the floor,
+# and the density trough separating them from the 0.3-0.7 bulge spans 0.20-0.40.
 WARMUP_GAP_S = 60  # a cold Request's cache write can still be in flight this long after
 
 # Idle-gap advisor: the ladder of gaps it tests, and the break rate at which resuming
@@ -182,6 +185,23 @@ def strip_replay(session):
     return reqs[i:] if i else reqs
 
 
+def prefix_floor(requests: list[dict[str, Any]]) -> int:
+    """The Prefix Floor of a Session: the head of the prompt re-sent identically on
+    every Request, which the provider re-caches immediately after any Cache Break.
+
+    Derived as the smallest non-zero Cached Input across the Session. That is a lower
+    bound on the floor, and a lower bound is the safe direction: under-stating it
+    leaves today's over-reported Retention, while over-stating it invents coldness on
+    a Break that really did keep conversation. The Session's *first* Cached Input
+    reads as the more literal cold-start prefix, but it is only that when the Session
+    began cold: on resumed Sessions it carries conversation too, and over the corpus
+    it exceeds a later Break's Cached Input on 85 of 478 Breaks and its whole Expected
+    Cache on 9. Zero when nothing was ever cached, which restores the unadjusted ratio.
+    """
+    cached = [r["cached"] for r in requests if r["cached"]]
+    return min(cached) if cached else 0
+
+
 def analyze(session):
     """Classify each request: first / hit / break / compaction. Adds per-request
     `kind`, `expected_cache`, `rebilled` and session-level aggregates."""
@@ -211,8 +231,13 @@ def analyze(session):
         total_input += r["input"]
         total_cached += r["cached"]
         prev = r
+    floor = prefix_floor(reqs)
+    for r in reqs:
+        recoverable = r["expected_cache"] - floor
+        r["retention"] = max(0.0, (r["cached"] - floor) / recoverable) if recoverable > 0 else 0.0
     session["analysis"] = {
         "requests": len(reqs),
+        "prefix_floor": floor,
         "breaks": breaks,
         "compactions": compactions,
         "rebilled_tokens": rebilled,
@@ -229,8 +254,7 @@ def ran_cold(request: dict[str, Any] | None) -> bool:
     the cache was empty for it, rather than merely diverging part-way through."""
     if request is None or request.get("kind") != "break":
         return False
-    expected = request["expected_cache"]
-    return bool(expected) and request["cached"] / expected < COLD_RETENTION
+    return request["retention"] < COLD_RETENTION
 
 
 def turn_context_changes(
@@ -264,8 +288,7 @@ def explain_breaks(session):
     for i, r in enumerate(reqs):
         if r["kind"] != "break":
             continue
-        expected = r["expected_cache"]
-        retention = r["cached"] / expected if expected else 0.0
+        retention = r["retention"]
         gap = r.get("gap_s", 0.0)
         previous = reqs[i - 1] if i else None
         ctx_changes = turn_context_changes(session, previous, r)
@@ -296,19 +319,20 @@ def explain_breaks(session):
             cause = CAUSE_HISTORY_REWRITE
             detail = (
                 f"first Request of a new Turn after only {fmt_duration(gap)} idle; "
-                f"history was re-serialized and {1 - retention:.0%} of the prefix diverged"
+                f"history was re-serialized and {1 - retention:.0%} of the "
+                f"recoverable prefix diverged"
             )
         elif retention >= COLD_RETENTION:
             cause = CAUSE_HISTORY_CHANGE
             detail = (
-                f"the cache was still warm ({retention:.0%} of the prefix survived) but "
-                f"the prompt diverged part-way through, mid-Turn"
+                f"the cache was still warm ({retention:.0%} of the recoverable "
+                f"prefix survived) but the prompt diverged part-way through, mid-Turn"
             )
         else:
             cause = CAUSE_UNKNOWN
             detail = (
                 f"cold cache with no idle gap and no turn_context change; "
-                f"kept {retention:.0%} of the expected prefix"
+                f"kept {retention:.0%} of the recoverable prefix above the Prefix Floor"
             )
         diagnoses.append(
             {
@@ -590,7 +614,7 @@ def main():
             print(
                 f"\n{d['index']:>4}  {d['cause']}  "
                 f"(rebilled {fmt_tokens(d['rebilled'])}, {fmt_duration(d['gap_s'])} since "
-                f"the previous request, {d['retention']:.0%} of the prefix kept)"
+                f"the previous request, {d['retention']:.0%} of the recoverable prefix kept)"
             )
             print(f"      {d['detail']}")
         by_cause = collections.Counter[str]()
