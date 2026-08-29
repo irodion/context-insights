@@ -754,7 +754,11 @@ def load_sessions(
     loaded = [s for s in map(load, sorted(sessions_dir.rglob(pattern))) if s]
     # Oldest first, so a Copied Request is kept by the Session that made it rather than
     # by whichever file sorts earlier: a fork inherits history, so the Session it forked
-    # from started before it.
+    # from started before it. A fork copies record timestamps verbatim (80 of 80 shared
+    # Requests here), so one inheriting from its parent's *first* Request would tie and
+    # fall back to path order. None does — 0 of 529 transcripts share a `started` — and
+    # a tie is undecidable anyway: the two files would share their whole leading block,
+    # and the format records nothing that says which of them placed the calls.
     loaded.sort(key=lambda s: s["started"] or "")
     sessions = []
     for s in loaded:
