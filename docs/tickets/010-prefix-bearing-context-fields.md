@@ -173,6 +173,16 @@ For change 2 (allow-list), only if the Evidence section was satisfied:
 
 ## Decisions
 
+**`005` found a way to source an allow-list without reading the agent's source.**
+Claude Code has no `turn_context` object, so its adapter had to *choose* fields — and
+chose them by measuring each candidate's Cache Break rate against the corpus base rate:
+`model` 84.6% and `effort` 71.4% against a 0.99% base, `cwd` 0.7% over 569 moves,
+`permissionMode` never moving at all. A field that is in the prompt breaks the cache
+when it changes; one that is not, does not. The same measurement is available for
+Codex's `turn_context` fields and would settle change 2 from the corpus rather than
+from `codex-rs`. That is a method, not a result: nothing here was measured for Codex.
+
+
 **Change 1 shipped 2026-08-28; change 2 did not.** The ordering fix needs no claim
 about Codex's prompt assembly, so it ships alone exactly as Scope proposed. The
 allow-list stays unshipped: the Evidence section admits only Codex's prompt-assembly

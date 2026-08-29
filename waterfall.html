@@ -64,7 +64,7 @@
 <div id="tip"></div>
 <script>
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? Math.round(n/1000)+"k" : String(n);
-const KINDS = ["first","hit","break","compaction"];
+const KINDS = ["first","hit","break","compaction","copied"];
 // request tuple: [input, cached, rebilled, kind, hh:mm]
 const IN=0, CA=1, RB=2, KI=3, TS=4;
 const POLL_MS = 3000;

@@ -25,3 +25,11 @@ check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
+
+# The Agent Source seam only holds if adapters are annotated: an unannotated loader
+# is `Callable[[Path], Any]`, which satisfies `SessionLoader` without conforming to
+# `Session`. Required in parse_codex.py, where the adapters live; the test file keeps
+# its unannotated `def test_...(self)` methods.
+[[tool.mypy.overrides]]
+module = "parse_codex"
+disallow_untyped_defs = true

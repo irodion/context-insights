@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import collections
+import fnmatch
 import functools
 import hashlib
 import http.server
@@ -19,17 +20,25 @@ import json
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 # Watch Mode: how often the Live Session is re-read. A few seconds of lag is fine —
 # the point is seeing a break within the Turn that caused it, not sub-second latency.
 WATCH_INTERVAL_S = 3.0
 WATCH_HOST = "127.0.0.1"  # local single-user tool: never bind a routable interface
 WATCH_PORT = 8787
+# The one Agent Source Watch Mode can follow. Its tail is Codex-shaped end to end — the
+# `rollout-*.jsonl` glob, `load_codex_session()`, and `peek_thread_source()` reading an
+# opening `session_meta` line, which no other source writes. Naming what *is* supported
+# means a new adapter is refused rather than silently handed the Codex watcher; wiring a
+# second one is ticket 002's remaining work, not a matter of listing it here.
+WATCHABLE_SOURCE = "codex"
 
 # Thresholds (heuristics, tune freely)
 # Billing ratios measure against zero; Retention (below) measures above the Prefix
@@ -72,11 +81,11 @@ TURN_CONTEXT_VOLATILE = {"turn_id"}
 FINGERPRINT_SCALAR_LEN = 40  # longer values are digested rather than shown verbatim
 
 
-def parse_ts(s):
+def parse_ts(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def gap_seconds(earlier, later):
+def gap_seconds(earlier: str | None, later: str | None) -> float:
     """Seconds between two log timestamps; 0.0 when either is missing or unparseable."""
     if not earlier or not later:
         return 0.0
@@ -104,11 +113,78 @@ def turn_context_fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
     return fingerprint
 
 
-def load_codex_session(path):
+# The seam between an Agent Source and everything downstream: what an adapter must
+# produce, and all that analysis, the Waterfall and the CLI are allowed to know. An
+# adapter fills these fields from whatever its own source happens to record; nothing
+# below this point may ask which agent produced them. Adding an Agent Source is
+# writing one function that returns a `Session`, and it is the type checker rather
+# than a reviewer that says whether it conforms.
+
+
+class Request(TypedDict):
+    """One API call (CONTEXT.md: Request), as every adapter must report it."""
+
+    ts: str | None
+    input: int  # the whole prompt: cached, newly written and fresh parts together
+    cached: int
+    cache_write: int
+    output: int
+    gap_s: float
+    turn: int
+    first_in_turn: bool
+    announced_compaction: bool  # the source said so, rather than the ratio guessing
+    ctx: int  # index into the Session's turn_contexts
+    # Only some sources record these. `id` is what makes a Copied Request findable at
+    # all, so a source that stamps its Requests with nothing cannot have one detected.
+    id: NotRequired[str]
+    total_input: NotRequired[int]  # Codex reports it; nothing downstream reads it yet
+    context_window: NotRequired[int | None]  # likewise
+    # Added after the adapter: `copied` by the corpus walk, the rest by analyze(),
+    # which classifies Requests in place rather than building a parallel list.
+    copied: NotRequired[bool]
+    kind: NotRequired[str]
+    expected_cache: NotRequired[int]
+    rebilled: NotRequired[int]
+    retention: NotRequired[float]
+
+
+class Analysis(TypedDict):
+    """What analyze() totals over a Session, counting its own Requests and not copies."""
+
+    requests: int
+    prefix_floor: int
+    breaks: int
+    compactions: int
+    rebilled_tokens: int
+    input_tokens: int
+    cached_tokens: int
+    hit_rate: float
+
+
+class Session(TypedDict):
+    """One Session file (CONTEXT.md: Session), normalized."""
+
+    file: str
+    agent_source: str
+    replays_parent: bool  # whether its subagents open by re-sending the parent history
+    session_id: str | None
+    thread_source: str  # "user" or "subagent"
+    cwd: str | None
+    started: str | None
+    model: str | None
+    turn_contexts: list[dict[str, Any]]
+    requests: list[Request]
+    analysis: NotRequired[Analysis]
+
+
+SessionLoader = Callable[[Path], Session | None]
+
+
+def load_codex_session(path: Path) -> Session | None:
     """Codex adapter: rollout-*.jsonl -> normalized session dict."""
     meta: dict[str, Any] = {}
     model = None
-    requests: list[dict[str, Any]] = []
+    requests: list[Request] = []
     turn_contexts: list[dict[str, Any]] = []
     prev_usage: tuple[dict[str, Any], dict[str, Any]] | None = None
     turn = 0
@@ -157,6 +233,7 @@ def load_codex_session(path):
                         "turn": turn,
                         "first_in_turn": not requests or requests[-1]["turn"] != turn,
                         "ctx": len(turn_contexts) - 1,
+                        "announced_compaction": False,  # Codex announces nothing
                     }
                 )
     if not meta and not requests:
@@ -164,6 +241,7 @@ def load_codex_session(path):
     return {
         "file": str(path),
         "agent_source": "codex",
+        "replays_parent": True,
         "session_id": meta.get("id") or meta.get("session_id"),
         "thread_source": meta.get("thread_source") or "user",
         "cwd": meta.get("cwd"),
@@ -174,26 +252,173 @@ def load_codex_session(path):
     }
 
 
-def strip_replay(session):
+def claude_turn_context(record: dict[str, Any]) -> dict[str, Any]:
+    """The prefix-bearing settings a Claude Code record carries, in the comparable form
+    `turn_context_changes()` diffs.
+
+    Claude Code has no turn_context object, so these two are chosen rather than
+    inherited, and they are chosen on evidence: over the corpus `model` moved 13 times
+    and broke the cache 11 (the server calls 8 of them `model_changed`), `effort` moved
+    7 and broke it 5. The tempting third, `cwd`, moved 569 times for a 0.7% break rate —
+    under the 0.99% base rate, so it is not in the prompt; `permissionMode` and
+    `entrypoint` never moved at all."""
+    message = record.get("message") or {}
+    return turn_context_fingerprint({"model": message.get("model"), "effort": record.get("effort")})
+
+
+def load_claude_session(path: Path) -> Session | None:
+    """Claude Code adapter: <session-id>.jsonl -> normalized session dict.
+
+    One `assistant` record per content block, so a Request is a group of records
+    sharing a `requestId` (see Content-Block Record in CONTEXT.md). Every record of a
+    group repeats the same usage; the last is taken, which is the one measured to
+    carry the final output count."""
+    groups: dict[str, dict[str, Any]] = {}
+    turn_contexts: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {}
+    prompt_id = None
+    turn = 0
+    sidechain = False
+    agent_id = None
+    compacted = False
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = rec.get("type")
+            sidechain = sidechain or bool(rec.get("isSidechain"))
+            agent_id = agent_id or rec.get("agentId")
+            if kind == "system" and rec.get("subtype") == "compact_boundary":
+                # Claude Code announces a Compaction; the next Request is the compacted
+                # prompt, whatever the size of the drop turns out to be.
+                compacted = True
+            elif kind == "user":
+                # Only `user` records carry `promptId`, and a tool result repeats the
+                # id of the prompt it is answering, so the agentic loop stays in one
+                # Turn. A new id is a new Turn.
+                pid = rec.get("promptId")
+                if pid and pid != prompt_id:
+                    prompt_id, turn = pid, turn + 1
+            elif kind == "assistant":
+                if rec.get("isApiErrorMessage") or rec.get("apiErrorStatus"):
+                    continue  # a Rejected Call is not a Request: it was billed nothing
+                if not meta:
+                    meta = rec
+                rid = rec.get("requestId")
+                if not rid:
+                    continue
+                if rid not in groups:
+                    context = claude_turn_context(rec)
+                    if not turn_contexts or turn_contexts[-1] != context:
+                        turn_contexts.append(context)
+                    groups[rid] = {
+                        "turn": turn,
+                        "compaction": compacted,
+                        "ctx": len(turn_contexts) - 1,
+                    }
+                    compacted = False
+                # Every record of the group repeats the usage; the last is the one
+                # measured to carry the final output count.
+                groups[rid]["rec"] = rec
+    requests: list[Request] = []
+    for rid, group in groups.items():
+        rec = group["rec"]
+        usage = (rec.get("message") or {}).get("usage") or {}
+        cached = usage.get("cache_read_input_tokens") or 0
+        cache_write = usage.get("cache_creation_input_tokens") or 0
+        ts = rec.get("timestamp")
+        requests.append(
+            {
+                "ts": ts,
+                # The provider bills a prompt in three parts; their sum is the prompt.
+                "input": (usage.get("input_tokens") or 0) + cached + cache_write,
+                "cached": cached,
+                "cache_write": cache_write,
+                "output": usage.get("output_tokens") or 0,
+                "gap_s": gap_seconds(requests[-1]["ts"] if requests else None, ts),
+                "turn": group["turn"],
+                "first_in_turn": not requests or requests[-1]["turn"] != group["turn"],
+                "announced_compaction": group["compaction"],
+                "ctx": group["ctx"],
+                "id": rid,
+            }
+        )
+    if not requests:
+        return None
+    return {
+        "file": str(path),
+        "agent_source": "claude-code",
+        # Measured over 318 sidechain Sessions: median first-Request cache_read is 0,
+        # 172 start at exactly zero. A Claude Code subagent opens cold, with nothing
+        # replayed to strip.
+        "replays_parent": False,
+        # A sidechain records the *parent's* sessionId, so a subagent has to be named
+        # by its own `agentId` or every child of one Session shares an identity.
+        "session_id": agent_id or meta.get("sessionId") or Path(path).stem,
+        "thread_source": "subagent" if sidechain else "user",
+        "cwd": meta.get("cwd"),
+        "started": requests[0]["ts"],
+        "model": (meta.get("message") or {}).get("model"),
+        "turn_contexts": turn_contexts,
+        "requests": requests,
+    }
+
+
+# Each Agent Source: where its Sessions live, what its files are called, and the
+# adapter that reads one. Claude Code's `*.jsonl` matches anything, so it stays last —
+# a source with a distinctive name must be listed above it to be recognized.
+ADAPTERS: dict[str, tuple[Path, str, SessionLoader]] = {
+    "codex": (SESSIONS_DIR, "rollout-*.jsonl", load_codex_session),
+    "claude-code": (CLAUDE_PROJECTS_DIR, "*.jsonl", load_claude_session),
+}
+
+
+def source_of(path: Path) -> str | None:
+    """The Agent Source whose file pattern this file's name matches, or None."""
+    for source, (_, pattern, _) in ADAPTERS.items():
+        if fnmatch.fnmatch(path.name, pattern):
+            return source
+    return None
+
+
+def load_session_file(path: Path) -> Session | None:
+    """One Session file through the adapter that recognizes its name. The Requests are
+    as the file records them, copies included: see `owned_session()` for the other
+    reading."""
+    source = source_of(path)
+    return ADAPTERS[source][2](path) if source else None
+
+
+def strip_replay(session: Session) -> list[Request]:
     """Subagent rollouts replay parent history as a leading burst of
     token_count events with near-identical timestamps. Drop that prefix,
-    keeping the last replayed event as the baseline for the child's own turns."""
+    keeping the last replayed event as the baseline for the child's own turns.
+
+    Only for an Agent Source that replays: a source whose subagents open cold has no
+    prefix to strip, and the burst window would eventually eat a fast pair of its own
+    Requests — including the cold start the Prefix Floor is measured from."""
     reqs = session["requests"]
-    if session["thread_source"] != "subagent" or len(reqs) < 2:
+    if not session["replays_parent"] or session["thread_source"] != "subagent":
+        return reqs
+    if len(reqs) < 2:
         return reqs
     i = 0
     while i + 1 < len(reqs):
         try:
-            delta = (parse_ts(reqs[i + 1]["ts"]) - parse_ts(reqs[i]["ts"])).total_seconds() * 1000
+            here = parse_ts(reqs[i]["ts"] or "")
+            following = parse_ts(reqs[i + 1]["ts"] or "")
         except (TypeError, ValueError):
             break
+        delta = (following - here).total_seconds() * 1000
         if delta > REPLAY_BURST_MS:
             break
         i += 1
     return reqs[i:] if i else reqs
 
 
-def prefix_floor(requests: list[dict[str, Any]]) -> int:
+def prefix_floor(requests: list[Request]) -> int:
     """The Session's Prefix Floor (see CONTEXT.md): the smallest Cached Input that two
     cache rebuilds agree on, or zero when nothing corroborates one.
 
@@ -241,7 +466,9 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     On a Session still being written, the floor is provisional: a later, colder rebuild
     can lower it, which lowers every Retention already reported for that Session.
     """
-    rebuilds = sorted((r["cached"], r["kind"]) for r in requests if r["kind"] != "hit")
+    rebuilds = sorted(
+        (r["cached"], r["kind"]) for r in requests if r["kind"] not in ("hit", "copied")
+    )
     if not rebuilds:
         return 0
     lowest = rebuilds[0][0]
@@ -251,13 +478,26 @@ def prefix_floor(requests: list[dict[str, Any]]) -> int:
     return lowest
 
 
-def analyze(session):
-    """Classify each request: first / hit / break / compaction. Adds per-request
-    `kind`, `expected_cache`, `rebilled`, `retention` and session-level aggregates."""
+def analyze(session: Session) -> Session:
+    """Classify each request: first / hit / break / compaction, or `copied` for a
+    Copied Request kept only as the next Request's Expected Cache. Adds per-request
+    `kind`, `expected_cache`, `rebilled`, `retention` and session-level aggregates,
+    which count this Session's own Requests and not the copies."""
     reqs = strip_replay(session)
     prev = None
     total_input = total_cached = rebilled = breaks = compactions = 0
+    own_requests = 0
     for r in reqs:
+        if r.get("copied"):
+            # Another Session's Request, kept only so the Request behind it has an
+            # Expected Cache. Not this Session's spend, so it is neither classified
+            # against this Session's history nor billed to it.
+            r["kind"] = "copied"
+            r["expected_cache"] = 0
+            r["rebilled"] = 0
+            prev = r
+            continue
+        own_requests += 1
         if prev is None:
             r["kind"] = "first"
             r["expected_cache"] = 0
@@ -265,7 +505,7 @@ def analyze(session):
         else:
             expected = prev["input"]
             r["expected_cache"] = expected
-            if r["input"] < COMPACTION_RATIO * prev["input"]:
+            if r["announced_compaction"] or r["input"] < COMPACTION_RATIO * prev["input"]:
                 r["kind"] = "compaction"
                 r["rebilled"] = 0
                 compactions += 1
@@ -286,7 +526,7 @@ def analyze(session):
         recoverable = r["expected_cache"] - floor
         r["retention"] = max(0.0, (r["cached"] - floor) / recoverable) if recoverable > 0 else 0.0
     session["analysis"] = {
-        "requests": len(reqs),
+        "requests": own_requests,
         "prefix_floor": floor,
         "breaks": breaks,
         "compactions": compactions,
@@ -299,7 +539,7 @@ def analyze(session):
     return session
 
 
-def ran_cold(request: dict[str, Any] | None) -> bool:
+def ran_cold(request: Request | None) -> bool:
     """True when this Request was itself a Cache Break that kept almost nothing —
     the cache was empty for it, rather than merely diverging part-way through."""
     if request is None or request.get("kind") != "break":
@@ -308,7 +548,7 @@ def ran_cold(request: dict[str, Any] | None) -> bool:
 
 
 def turn_context_changes(
-    session: dict[str, Any], previous: dict[str, Any] | None, request: dict[str, Any]
+    session: Session, previous: Request | None, request: Request
 ) -> list[tuple[str, Any, Any]]:
     """Fields whose value differs between the turn_context of `previous` and of
     `request`. Empty when nothing changed, or when either context is unknown."""
@@ -328,7 +568,7 @@ def turn_context_changes(
     ]
 
 
-def explain_breaks(session):
+def explain_breaks(session: Session) -> list[dict[str, Any]]:
     """Diagnose every Cache Break in an analyzed session.
 
     Returns one dict per break: index, cause, gap_s, retention, rebilled, detail.
@@ -396,7 +636,7 @@ def explain_breaks(session):
     return diagnoses
 
 
-def idle_gap_advice(sessions):
+def idle_gap_advice(sessions: list[Session]) -> dict[str, Any] | None:
     """Correlate idle gap with Cache Break rate across sessions and derive the gap
     beyond which resuming a Session stops being worth it. The threshold comes from
     the observed data, not from a constant: it is the shortest gap on the ladder at
@@ -423,19 +663,17 @@ def idle_gap_advice(sessions):
     return None
 
 
-KIND_CODE = {"first": 0, "hit": 1, "break": 2, "compaction": 3}
+KIND_CODE = {"first": 0, "hit": 1, "break": 2, "compaction": 3, "copied": 4}
 
 
-def session_key(session: dict[str, Any]) -> str:
+def session_key(session: Session) -> str:
     """Stable identity for a Session across rewrites: the viewer holds its selection
     by this rather than by row number, and Watch Mode uses it to recognize a Session
     it has already seen."""
     return session["session_id"] or session["file"]
 
 
-def waterfall_payload(
-    sessions: list[dict[str, Any]], live: Path | None = None
-) -> list[dict[str, Any]]:
+def waterfall_payload(sessions: list[Session], live: Path | None = None) -> list[dict[str, Any]]:
     """The rows waterfall.html renders: Sessions ranked by Re-billed Tokens, with
     the Live Session — the one Watch Mode is following — pinned first."""
     live_file = str(live) if live else None
@@ -479,18 +717,98 @@ def write_waterfall_data(payload: list[dict[str, Any]]) -> Path:
     return out
 
 
-def load_sessions(sessions_dir: Path, min_requests: int, include_all: bool) -> list[dict[str, Any]]:
-    """Every rollout under `sessions_dir`, normalized and analyzed. Sessions too short
-    to say anything are dropped, as are subagent ones unless `include_all`."""
+def drop_copied_requests(requests: list[Request], seen: set[str]) -> list[Request]:
+    """This Session's Requests, with the Copied ones removed — except a copy that one of
+    its own Requests follows, which stays behind as that Request's baseline.
+
+    A Copied Request is another Session's spend but this Session's history: the next
+    prompt is built on top of it. Removed outright, the Request behind it inherits an
+    older, smaller prompt as its Expected Cache, and a Cache Break silently becomes a
+    hit. The baseline that stays is marked `copied`, because it is context and not this
+    Session's Request: classifying it would measure it against a history it is no longer
+    part of, which invents a Cache Break neither Session recorded."""
+    kept: list[Request] = []
+    for i, r in enumerate(requests):
+        own = r.get("id") not in seen
+        follower_is_own = i + 1 < len(requests) and requests[i + 1].get("id") not in seen
+        if own:
+            kept.append(r)
+        elif follower_is_own:
+            kept.append({**r, "copied": True})
+    return kept
+
+
+def load_sessions(
+    sessions_dir: Path,
+    min_requests: int,
+    include_all: bool,
+    source: str,
+    seen: set[str],
+) -> list[Session]:
+    """Every Session file under `sessions_dir`, normalized and analyzed. Sessions too
+    short to say anything are dropped, as are subagent ones unless `include_all`.
+
+    `seen` carries request ids across files: a Request already met in an earlier
+    Session is a Copied Request and belongs to that Session, not to this one."""
+    _, pattern, load = ADAPTERS[source]
+    loaded = [s for s in map(load, sorted(sessions_dir.rglob(pattern))) if s]
+    # Oldest first, so a Copied Request is kept by the Session that made it rather than
+    # by whichever file sorts earlier: a fork inherits history, so the Session it forked
+    # from started before it.
+    loaded.sort(key=lambda s: s["started"] or "")
     sessions = []
-    for path in sorted(sessions_dir.rglob("rollout-*.jsonl")):
-        s = load_codex_session(path)
-        if not s or len(s["requests"]) < min_requests:
+    for s in loaded:
+        s["requests"] = drop_copied_requests(s["requests"], seen)
+        seen.update(r["id"] for r in s["requests"] if r.get("id"))
+        if len(s["requests"]) < min_requests:
             continue
         if not include_all and s["thread_source"] != "user":
             continue
         sessions.append(analyze(s))
     return sessions
+
+
+def load_corpus(
+    sources: list[str],
+    min_requests: int,
+    include_all: bool,
+    roots: dict[str, Path],
+) -> list[Session]:
+    """Every Session of every named Agent Source, with one request-id set spanning the
+    walk so a Copied Request is counted once, in the first Session that holds it."""
+    seen: set[str] = set()
+    sessions: list[Session] = []
+    for source in sources:
+        root = roots.get(source) or ADAPTERS[source][0]
+        if not root.exists():
+            continue
+        sessions.extend(load_sessions(root, min_requests, include_all, source, seen))
+    return sessions
+
+
+def owned_session(path: Path, root: Path) -> Session | None:
+    """One Session file, analyzed as the corpus analyzes it — the single-file answer
+    that agrees with what `--web` reports for the same Session.
+
+    A Copied Request is recorded in this file but was billed to another Session, and
+    no single file can say which: that needs every Session of the same Agent Source,
+    walked oldest first. So `root` is walked exactly as the corpus walk walks it and
+    the requested Session is picked out of the result. Reading the file alone counts
+    the copies as this Session's own — 80 Requests, a 5% over-count, on one transcript
+    of this corpus.
+
+    None when the file is not under `root`, or holds no Session at all; the caller
+    then has to say that the figures it falls back to are per-file."""
+    source = source_of(path)
+    if source is None:
+        return None
+    target = path.resolve()
+    # `min_requests` and `include_all` filter what comes back, never what enters the
+    # ownership set, so ownership is settled here identically to the corpus walk.
+    for session in load_sessions(root, 0, True, source, set()):
+        if Path(session["file"]).resolve() == target:
+            return session
+    return None
 
 
 def peek_thread_source(path: Path) -> str:
@@ -512,7 +830,8 @@ def find_live_session(sessions_dir: Path) -> Path | None:
     """The Live Session: the newest-modified rollout you are sitting in front of.
     Subagent rollouts are skipped — a child spawned mid-Turn writes last, but it is
     not the Session being worked in."""
-    rollouts = sorted(sessions_dir.rglob("rollout-*.jsonl"), key=lambda p: -p.stat().st_mtime)
+    pattern = ADAPTERS["codex"][1]
+    rollouts = sorted(sessions_dir.rglob(pattern), key=lambda p: -p.stat().st_mtime)
     for path in rollouts:
         if peek_thread_source(path) == "user":
             return path
@@ -550,10 +869,11 @@ class WatchMode:
     def __init__(self, sessions_dir: Path, min_requests: int, include_all: bool) -> None:
         self.sessions_dir = sessions_dir
         self.seen = {
-            session_key(s): s for s in load_sessions(sessions_dir, min_requests, include_all)
+            session_key(s): s
+            for s in load_sessions(sessions_dir, min_requests, include_all, "codex", set())
         }
         self.live: Path | None = None
-        self._signal: tuple[str, dict[str, Any]] | None = None
+        self._signal: tuple[str, Analysis] | None = None
         self._ticked = False
 
     def tick(self) -> list[dict[str, Any]] | None:
@@ -604,7 +924,7 @@ def watch(sessions_dir: Path, port: int, min_requests: int, include_all: bool) -
         httpd.server_close()
 
 
-def fmt_duration(seconds):
+def fmt_duration(seconds: float) -> str:
     if seconds >= 3600:
         return f"{seconds / 3600:.1f}h"
     if seconds >= 60:
@@ -612,15 +932,25 @@ def fmt_duration(seconds):
     return f"{seconds:.0f}s"
 
 
-def fmt_tokens(n):
+def fmt_tokens(n: float) -> str:
     return (
         f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1000:.0f}k" if n >= 1000 else str(n)
     )
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dir", default=str(SESSIONS_DIR))
+    ap.add_argument(
+        "--source",
+        choices=[*ADAPTERS, "all"],
+        default="all",
+        help="which Agent Source to read (default: every adapter present)",
+    )
+    ap.add_argument(
+        "--dir",
+        help="read one source from here instead of its usual directory; with --session "
+        "or --explain, the root Request ownership is settled against",
+    )
     ap.add_argument("--all", action="store_true", help="include subagent/other sessions")
     ap.add_argument("--session", help="analyze a single rollout file in detail")
     ap.add_argument("--explain", help="diagnose what invalidated the cache in one rollout file")
@@ -635,18 +965,44 @@ def main():
     ap.add_argument("--port", type=int, default=WATCH_PORT, help="port for --watch")
     ap.add_argument("--min-requests", type=int, default=3)
     args = ap.parse_args()
-
     if args.watch:
+        if args.source not in (WATCHABLE_SOURCE, "all"):
+            ap.error(
+                f"watch mode follows a {WATCHABLE_SOURCE} Session, and --source "
+                f"{args.source} is not one; read it with --web instead"
+            )
         watch(
-            Path(args.dir),
+            Path(args.dir) if args.dir else ADAPTERS[WATCHABLE_SOURCE][0],
             port=args.port,
             min_requests=args.min_requests,
             include_all=args.all,
         )
         return
 
+    def analyzed_file(arg: str) -> Session:
+        """One named Session file, with its Copied Requests attributed to whichever
+        Session paid for them, so that these commands and the Waterfall report the
+        same Session the same way."""
+        path = Path(arg)
+        source = source_of(path)
+        if source is None:
+            ap.error(f"{arg}: no adapter recognizes this file name")
+        root = Path(args.dir) if args.dir else ADAPTERS[source][0]
+        owned = owned_session(path, root)
+        if owned is not None:
+            return owned
+        loaded = load_session_file(path)
+        if loaded is None:
+            ap.error(f"{arg}: no Requests found — is it a Session file?")
+        print(
+            f"note: {path} is not under {root}, so a Copied Request cannot be told from "
+            "this Session's own; the figures below count every Request in the file",
+            file=sys.stderr,
+        )
+        return analyze(loaded)
+
     if args.explain:
-        s = analyze(load_codex_session(Path(args.explain)))
+        s = analyzed_file(args.explain)
         a = s["analysis"]
         diagnoses = explain_breaks(s)
         if args.request is not None:
@@ -681,7 +1037,7 @@ def main():
         return
 
     if args.session:
-        s = analyze(load_codex_session(Path(args.session)))
+        s = analyzed_file(args.session)
         a = s["analysis"]
         print(f"{s['session_id']}  {s['model'] or '?'}  {s['thread_source']}  {s['cwd']}")
         print(
@@ -689,7 +1045,9 @@ def main():
             f"hit_rate={a['hit_rate']:.0%} rebilled={fmt_tokens(a['rebilled_tokens'])}"
         )
         for i, r in enumerate(s["requests"]):
-            mark = {"first": " ", "hit": " ", "break": "!", "compaction": "~"}[r["kind"]]
+            mark = {"first": " ", "hit": " ", "break": "!", "compaction": "~", "copied": "="}[
+                r["kind"]
+            ]
             bar_n = min(60, r["input"] // 5000)
             cached_n = min(bar_n, int(bar_n * (r["cached"] / r["input"])) if r["input"] else 0)
             bar = "█" * cached_n + "░" * (bar_n - cached_n)
@@ -700,7 +1058,11 @@ def main():
             )
         return
 
-    sessions = load_sessions(Path(args.dir), args.min_requests, args.all)
+    sources = list(ADAPTERS) if args.source == "all" else [args.source]
+    if args.dir and args.source == "all":
+        ap.error("--dir names the directory of one source; pass --source too")
+    roots = {args.source: Path(args.dir)} if args.dir else {}
+    sessions = load_corpus(sources, args.min_requests, args.all, roots)
 
     if args.web:
         compact = waterfall_payload(sessions)
@@ -712,7 +1074,7 @@ def main():
         print(f"wrote {len(sessions)} sessions to {args.json}", file=sys.stderr)
 
     tot = {"input": 0, "cached": 0, "rebilled": 0, "breaks": 0, "requests": 0}
-    rows = []
+    rows: list[Session] = []
     for s in sessions:
         a = s["analysis"]
         tot["input"] += a["input_tokens"]
