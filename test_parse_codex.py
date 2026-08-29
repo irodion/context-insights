@@ -10,26 +10,18 @@ Seams under test:
   when nothing moved). What survives across ticks is the point: a Session must keep
   what it accrued while live once Watch Mode moves on to a newer one.
 
-Fixtures are synthetic Codex rollouts written to a temp file and read back through
-the real adapter, so the tests exercise the public path (`load_codex_session` ->
-`analyze` -> ...) rather than internals.
+Fixtures are synthetic rollouts written to a temp file and read back through the real
+adapter, so the tests exercise the public path (`load_codex_session` -> `analyze` ->
+...) rather than internals. The Claude Code suite is `test_claude_adapter.py`; the file
+helpers both suites use are in `support.py`.
 """
 
-import json
 import os
-import tempfile
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import parse_codex
-
-BASE = datetime.fromisoformat("2026-03-20T18:00:00+00:00")
-
-
-def at(seconds: float) -> str:
-    """Timestamp `seconds` after the session start, in Codex's log format."""
-    return (BASE + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+from support import at, temp_dir, write_jsonl
 
 
 def event(ts: str, type_: str, payload: dict) -> dict:
@@ -76,12 +68,6 @@ def turn_end(ts: str) -> dict:
     return event(ts, "event_msg", {"type": "task_complete"})
 
 
-def temp_dir(testcase: unittest.TestCase) -> Path:
-    tmp = tempfile.TemporaryDirectory()
-    testcase.addCleanup(tmp.cleanup)
-    return Path(tmp.name)
-
-
 class RolloutFixture:
     """Builds a synthetic rollout-*.jsonl and loads it through the adapter."""
 
@@ -114,14 +100,12 @@ class RolloutFixture:
         return self
 
     def write(self, modified: float | None = None) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text("\n".join(json.dumps(e) for e in self.events) + "\n")
-        if modified is not None:
-            os.utime(self.path, (modified, modified))
-        return self.path
+        return write_jsonl(self.path, self.events, modified)
 
-    def analyzed(self) -> dict:
-        return parse_codex.analyze(parse_codex.load_codex_session(self.write()))
+    def analyzed(self) -> parse_codex.Session:
+        session = parse_codex.load_codex_session(self.write())
+        assert session is not None, "fixture wrote no Session"
+        return parse_codex.analyze(session)
 
 
 def a_turn(fixture: RolloutFixture, **context) -> RolloutFixture:
@@ -795,7 +779,3 @@ class WatchModeTest(unittest.TestCase):
         watcher = parse_codex.WatchMode(temp_dir(self), min_requests=3, include_all=False)
 
         self.assertEqual(watcher.tick(), [])
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -2,13 +2,15 @@
 
 ## Core concepts
 
-**Agent Source** — a CLI AI agent whose logs we can parse. Currently: Codex CLI (`~/.codex/sessions`). Planned: Cursor CLI Agent (no local install yet, adapter deferred). Each Agent Source gets an adapter that normalizes its logs into Sessions and Requests.
+**Agent Source** — a CLI AI agent whose logs we can parse. Currently: Codex CLI (`~/.codex/sessions`) and Claude Code (`~/.claude/projects`). Planned: Cursor CLI Agent (no local install yet, adapter deferred). Each Agent Source gets an adapter that normalizes its logs into Sessions and Requests; analysis downstream of an adapter never asks which agent produced a Session.
 
-**Session** — one conversation thread of an agent, backed by one rollout file (Codex: `rollout-*.jsonl`). Has a Thread Source.
+**Session** — one conversation thread of an agent, backed by one log file (Codex: `rollout-*.jsonl`; Claude Code: `<session-id>.jsonl` under a per-project directory). Has a Thread Source.
 
-**Thread Source** — who initiated the Session: `user` (a person in the TUI/Desktop), `subagent` (spawned by another Session), or other (`realtime_voice`, ...). Subagent Sessions replay the parent's token history into their own log; their replayed prefix must not be counted as this Session's own spend.
+**Thread Source** — who initiated the Session: `user` (a person in the TUI/Desktop), `subagent` (spawned by another Session), or other (`realtime_voice`, ...). Codex subagent Sessions replay the parent's token history into their own log; their replayed prefix must not be counted as this Session's own spend. Claude Code marks the same distinction per record (`isSidechain`) and does *not* replay — its subagent Sessions start cold, so there is no prefix to strip, only a Session to label.
 
-**Request** — one API call to the model, the atomic unit of measurement. In Codex logs it is a `token_count` event; its `last_token_usage` gives this Request's own tokens: input, cached input, cache-write input, output, reasoning output.
+**Request** — one API call to the model, the atomic unit of measurement. In Codex logs it is a `token_count` event; its `last_token_usage` gives this Request's own tokens: input, cached input, cache-write input, output, reasoning output. In Claude Code logs it is a group of `assistant` records sharing a `requestId`, and the group's usage is the last record's.
+
+A log record is not automatically a Request. Every Agent Source writes records that no API call stands behind — Codex a Replayed Request, Claude Code a Content-Block Record — and each must be collapsed before anything is counted: an invented Request invents a Cache Break with it.
 
 **Turn** — one user-prompt-to-final-answer exchange; contains one or more Requests (the agentic loop).
 
@@ -22,7 +24,7 @@
 
 **Re-billed Tokens** — the tokens a Cache Break cost: Expected Cache minus Cached Input. These were paid at the full input rate although they had been processed (and cached) before.
 
-**Compaction** — the agent summarizes history to shrink context; input tokens drop sharply. Looks like a Cache Break in the numbers but is deliberate; classified separately.
+**Compaction** — the agent summarizes history to shrink context; input tokens drop sharply. Looks like a Cache Break in the numbers but is deliberate; classified separately. Codex leaves it to be inferred from the drop; Claude Code *announces* it (a `compact_boundary` record carrying the pre- and post-Compaction token counts). An announced Compaction is taken at its word — the ratio is what a silent source falls back to, not a second opinion on a source that spoke.
 
 **Hit Rate** — Cached Input / total input tokens, per Request or aggregated over a Session.
 
@@ -79,6 +81,49 @@ Requests break, beyond an hour 86% do.
 call having happened (Codex does this twice within a Turn and again when the next
 Turn opens). Its usage is byte-identical to the Request before it. Not a Request:
 counting it invents Cache Breaks that never occurred.
+
+**Content-Block Record** — Claude Code writes one `assistant` record per content
+block of a reply, so a single API call leaves several records behind, all carrying
+the same `requestId`. Not Requests: the group is one Request, and its usage is the
+last record's — the one that carries the final output count. Counting the records
+instead of the groups reports 1,055 Cache Breaks over a corpus that holds 155. The
+same class of defect as a Replayed Request, arriving by a different mechanism and
+fixed a different way.
+
+**Rejected Call** — an API call the provider turned away (Claude Code records it as
+an `assistant` record carrying an error status — 429 or 529 — and a `usage` block of
+zeros). Not a Request: it was billed nothing, and counting it as one does more than
+add a row. Its zero prompt becomes the *next* Request's Expected Cache, so a genuine
+Cache Break behind a rejection reads as a clean hit, and its zero Cached Input enters
+the Prefix Floor as a cold rebuild that never happened.
+
+**Copied Request** — the same Request written into more than one Session file,
+because forking or resuming a Session copies the history it inherits, request ids
+included. Finding one needs the Agent Source to stamp a Request with an id that travels
+with the copy; a source that does not copy needs none (Codex stamps nothing, and over
+400 rollouts no `token_count` event appears in two files).
+
+It was billed once, so it is counted once, and it is counted where it was spent: the
+Session already running when the call was made keeps it, and the Session that inherited
+it drops it. Those tokens were another Session's spend — the same reason a Codex
+subagent's replayed prefix is not the child's. Sessions are therefore walked oldest
+first; the file that sorts first is not the Session that made the call, and over this
+corpus is eight hours younger than it. Ownership is therefore a property of the corpus
+and not of the file: one transcript read on its own cannot tell an inherited Request
+from one it paid for, so the single-Session commands settle it against the same walk
+rather than counting what the file records.
+
+**A copy is dropped, but not forgotten.** The last copy of a run stays behind as the
+Expected Cache of the Request that follows it, because that Request's prompt was built
+on top of it. Dropped outright it would hand its successor an older, smaller prompt and
+turn a Cache Break into a hit — and a resumed Session's *first* Request, the one most
+likely to have re-paid for everything, is exactly the Request behind a copy.
+
+What stays is **context, not a Request of this Session**: it sets the next Expected
+Cache and nothing else. It is not classified, not billed here, and not evidence for the
+Prefix Floor. Classifying it would measure it against a history it is no longer part of
+— the Requests between it and whatever now precedes it were dropped, and a Compaction
+among them makes that comparison invent a Cache Break neither Session recorded.
 
 ## Watching
 
